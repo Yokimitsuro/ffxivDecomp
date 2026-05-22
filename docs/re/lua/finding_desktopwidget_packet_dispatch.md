@@ -215,6 +215,113 @@ For Journal-type subKeys (`qtdata`, `activegl`), the routing collapses
 to a numeric journalDetailType (1 = Quest, 2 = Active Guildleve)
 which then drives `processUpdateJournalDetailWidget`.
 
+## Other actors override `_onReceiveDataPacket` with their own enums
+
+The fan-out described above is `PlayerBaseClass`'s implementation.
+Other actor classes have their **own override** of
+`_onReceiveDataPacket` with a **different** packetType space.
+
+### `CharaBaseClass._onReceiveDataPacket` — adds the `"data"` packet
+
+The parent class of Player handles ONE additional string-typed
+packetType:
+
+```lua
+function CharaBaseClass:_onReceiveDataPacket(packetType, ...)
+  if packetType == "data" then
+    self:processReceiveData(select(1, ...))
+  end
+end
+```
+
+So there are actually **three** string-typed packetTypes in
+circulation (now confirmed):
+
+```text
+packetType        recipient                        Lua handler
+----------------  -------------------------------  ----------------------------
+"requestedData"   Player (most-specific override)  processRecievedRequestedDataForWidget
+"attention"       Player                           processUpdatePublicInformationDialog
+"data"            Chara (parent of Player)         processReceiveData (subclass overrides)
+                                                   -- generic "I have a data
+                                                   blob for your subclass to
+                                                   parse"
+```
+
+When a packet arrives, the actor's class hierarchy is walked from
+most-specific to least-specific via `_callSuperClassFunc`, so the
+order of attempts on the local-player actor is:
+
+```text
+PlayerBaseClass._onReceiveDataPacket   -- tries "requestedData" / "attention" / <number>
+  -> super: CharaBaseClass._onReceiveDataPacket  -- tries "data"
+       -> super: ActorBaseClass._onReceiveDataPacket  -- empty
+```
+
+CharaBase's `processReceiveData` is a placeholder — subclasses
+override it to give meaning to the `"data"` payload for their type.
+
+### `InstanceRaidBaseClass._onReceiveDataPacket` — numeric enum
+
+The director for an instance-raid session handles **three numeric
+packetTypes** (each gated on `instanceRaidWork.initFlag` being true):
+
+```lua
+function InstanceRaidBaseClass:_onReceiveDataPacket(packetType, ...)
+  if not self.instanceRaidWork.initFlag then return end
+
+  if packetType == 1 then
+    -- INSTANCE CLEAR: start countdown timer
+    self.instanceRaidWork.clearFlag = true
+    local a = select(1, ...)
+    local b = select(2, ...)
+    self:setCountDownTimer(a, b, false)
+    self:closeInformationWidget()
+
+  elseif packetType == 2 then
+    -- INSTANCE CLEAR (instant): no countdown
+    self.instanceRaidWork.clearFlag = true
+    self.instanceRaidWork.countdownStatus = 0
+    self:closeInformationWidget()
+
+  elseif packetType == 3 then
+    -- USER MESSAGE: forward to processUserMessage
+    self:processUserMessage(select(1, ...))
+  end
+end
+```
+
+```text
+InstanceRaid packetType  meaning
+-----------------------  ---------------------------------------------
+        1                INSTANCE CLEAR with timer (countdown start)
+        2                INSTANCE CLEAR (instant; no timer)
+        3                USER MESSAGE within the instance
+```
+
+So the **server signals "instance raid completed"** by sending an
+IPC packet that the C++ side decodes to packetType 1 or 2 targeting
+the InstanceRaid director actor.
+
+### Other InstanceRaid effect IDs (also pinned)
+
+In the same file, `processStartEffect` and `processFailedEffect` call
+`desktopWidget:openPublicEffectWidget(N)` with fixed effect ids:
+
+```text
+processStartEffect    -> openPublicEffectWidget(1)
+processFailedEffect   -> openPublicEffectWidget(3)
+```
+
+Cross-referencing with the `processUpdateGeneralNotificationDialog`
+notification subtype 3 ("PUBLIC EFFECT") and the
+`openPublicEffectWidget(payload)` it calls there: **public effect 1 =
+"instance start" effect** and **public effect 3 = "instance fail"
+effect**. Both are visual overlay effects (screen flashes / banners).
+
+The cutscene id `63` is used by `InstanceRaidBaseClass:executeCutScene`
+to start the standard "you entered an instance raid" cutscene.
+
 ## `processUpdateContentsInformation` — bonus dispatcher
 
 A fourth game-side dispatcher discovered above
