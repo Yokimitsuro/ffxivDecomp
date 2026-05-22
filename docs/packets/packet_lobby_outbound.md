@@ -1,9 +1,12 @@
-# Packet Spec: Lobby Outbound Wire Shape (4 opcodes)
+# Packet Spec: Lobby Outbound Wire Shape (8 opcodes)
 
-Wire shape of the four outbound IPC packets the client sends to the
-lobby server during the 4-phase login flow. Extracted from
-`LobbyLoginOperation_buildAndSendPacket` (`FUN_00da9880`) — a single
-function with a switch on `step_type` (0/2/3/4) that emits all four.
+Wire shape of the **eight** outbound IPC packets the client sends to
+the lobby server during the 4-phase login flow plus chara-make and
+sub-operations. Four come from
+`LobbyLoginOperation_buildAndSendPacket` (`FUN_00da9880` — the main
+switch on `step_type` for big request packets); four more come from
+sibling helpers on the same `LobbyLoginOperation` (small ACK / sub-op
+packets).
 
 This is the **first concrete wire spec** for any of the three IPC
 channels. The lobby outbound is fully pinned; the lobby inbound (the
@@ -120,6 +123,106 @@ the phase-2 lists.
 
 Credentials A and B repeat from phase 2.
 
+## Opcode 0x03 — small ACK (32 bytes)
+
+```text
+size: 0x20 (32 bytes)
+emitted from: LobbyLoginOperation_sendAck32 (FUN_00daa070)
+              bound to LobbyLoginOperation vtable slot at 0x01127fbc
+
+layout:
+  +0x00  uint32  session_id     (from LobbyClient+0xc)
+  +0x08  uint8   sub_flag       (from this+0x3c)
+  +0x09  uint8   const = 0x11   (always 17)
+  +0x0C  uint32  step_token     (from this+0x38)
+  rest:  zero
+```
+
+After this send, the operation's "next inbound opcode" pointer is set
+to **0x0D** — i.e. the server is expected to respond with opcode 0x0D
+on the LobbyProtoDown channel.
+
+## Opcode 0x04 — small ACK (40 bytes)
+
+```text
+size: 0x28 (40 bytes)
+emitted from: LobbyLoginOperation_sendAck40 (FUN_00daa740)
+              bound to LobbyLoginOperation vtable slot at 0x01127fec
+
+layout:
+  +0x00  uint32  session_id      (from LobbyClient+0xc)
+  +0x08  uint32  context_dword   (from (LobbyClient+0x8+0x14)+0xc)
+  +0x10  uint8   context_byte    (from (LobbyClient+0x8+0x14)+0x8)
+  rest:  zero
+```
+
+After this send, the "next inbound opcode" pointer is set to **0x0F**.
+
+## Opcode 0x0B — PUT_CHARA_MAKE_DATA (480 bytes; streamed)
+
+```text
+size: 0x1E0 (480 bytes per chunk)
+emitted from: LobbyLoginOperation_sendCharaMakeOrSubOp (FUN_00daa190)
+              when operation_step->subtype == 0
+              bound to LobbyLoginOperation vtable slot at 0x01127fd4
+```
+
+This is the **bulk chara-make data carrier**. Mode byte at +0x11 of
+the payload selects:
+
+```text
+mode 0x01  NAME-only          : 400-byte block strncpy'd from step+0x6c
+mode 0x02  FULL APPEARANCE    : 400-byte block from step+0xc0 via FUN_005a6f10,
+                                CHUNKED LOOP -- one packet per chunk until the
+                                source string is exhausted; high bit of mode byte
+                                set on non-final chunks ((byte) | 0x80)
+mode 0x06  RETAINER OP        : single packet, copies step+0xd byte to +0x72
+other     generic
+```
+
+Shared header in every payload chunk:
+
+```text
++0x00  uint32  session_id     (LobbyClient+0xc)
++0x10  uint8   mode           (1/2/6/other)
++0x08  uint32  field          (step+0x10)
++0x14  uint8   field          (step+0xc)
++0x0C  uint32  field          (step+0x14)
++0x12  uint16  field          (step+0xe)
++0x14  char[0x20] name        (32 B strncpy from step+0x18)
++0x34  ...     payload-specific (the 400-byte appearance for mode 2)
+```
+
+After (the last) send, the "next inbound opcode" pointer is set to
+**0x0E**.
+
+The chunked-loop behaviour for mode 2 means a full chara-make can
+require **multiple wire packets** to deliver the appearance blob —
+the server has to reassemble them by watching the high bit of the
+mode byte.
+
+## Opcode 0x0F — service-login sub-op (160 bytes)
+
+```text
+size: 0xA0 (160 bytes)
+emitted from: LobbyLoginOperation_sendCharaMakeOrSubOp (FUN_00daa190)
+              when operation_step->subtype == 1
+              same Ghidra function as opcode 0x0B but a different branch
+
+layout:
+  +0x00  uint32  session_id     (LobbyClient+0xc)
+  +0x10  uint8[0x20]  block_a   (memcpy 32 B from step+0x18 onwards)
+  +0x30  uint8[0x60]  block_b   (memcpy 96 B from step+0x38 onwards)
+  rest:  zero
+```
+
+After this send, the "next inbound opcode" pointer is set to **0x10**.
+
+This appears to be a **service-login follow-up packet** the client
+sends in response to a server hint. The 32+96-byte blocks have no
+strncpy markers (they're raw memcpy), so they probably carry binary
+data (e.g. a server-issued session-extension token).
+
 ## Opcode 0x1F6 (502) — CHARA_MAKE_REQUEST (phase 4, optional)
 
 ```text
@@ -177,15 +280,24 @@ positive response. So the state cycle is:
 ## Pinned EXE primitives (renamed in Ghidra)
 
 ```text
-FUN_00da9880  LobbyLoginOperation_buildAndSendPacket
-FUN_00da2be0  IpcPacket_buildHeader
-FUN_004e7750  IpcPacket_acquireSendSlot
-FUN_004e80b0  IpcPacket_finalizeAndSend
-FUN_00da45b0  LobbyClient_ensureConnection
-FUN_00da54d0  LobbyClient_queueLoginOperation
-FUN_00da4790  InitOperationStep_kick
-FUN_00da7040  LobbyLoginOperationStep_kick
-FUN_00dab290  LobbyConnection_ctor
+Main packet builders / send primitives
+  FUN_00da9880  LobbyLoginOperation_buildAndSendPacket (switch: 0x1F5/0x05/0x06/0x1F6)
+  FUN_00daa070  LobbyLoginOperation_sendAck32          (0x03)
+  FUN_00daa740  LobbyLoginOperation_sendAck40          (0x04)
+  FUN_00daa190  LobbyLoginOperation_sendCharaMakeOrSubOp (0x0B / 0x0F)
+  FUN_00da2be0  IpcPacket_buildHeader
+  FUN_004e7750  IpcPacket_acquireSendSlot
+  FUN_004e80b0  IpcPacket_finalizeAndSend
+
+Inbound step handlers (server -> client step ACKs)
+  FUN_00da5410  LobbyLoginOperationStep_onLobbyLogin   (sets step->done flag)
+
+Connection management
+  FUN_00da45b0  LobbyClient_ensureConnection           (allocates LobbyConnection if needed)
+  FUN_00da54d0  LobbyClient_queueLoginOperation        (queues another LobbyLoginOperation)
+  FUN_00da4790  InitOperationStep_kick                 (kicks via LobbyClient_ensureConnection)
+  FUN_00da7040  LobbyLoginOperationStep_kick           (kicks via LobbyClient_queueLoginOperation)
+  FUN_00dab290  LobbyConnection_ctor                   (0xA8 bytes; RaptureChannelManager subclass)
 ```
 
 ## Operation-step subclass roster (RTTI-confirmed)
@@ -237,21 +349,74 @@ TCP connect
   TCP teardown; switch to world server
 ```
 
+## Inbound side (server -> client) — partial
+
+Each operation step has a small per-step inbound handler that fires
+when the matching server response arrives. The first one is now
+pinned:
+
+```text
+LobbyLoginOperationStep::onLobbyLogin  (FUN_00da5410)
+  -> just sets step->done_flag (+0xd) = 1 and logs.
+```
+
+The full inbound handler chain is:
+
+```text
+server packet on LobbyProtoDown
+  -> ProtoChannel_dispatchPacketById (the std::map<id, Handler> from
+     finding_packet_dispatch_by_id.md)
+  -> a per-opcode handler that:
+       1. updates step->done_flag (via the per-step handler like
+          LobbyLoginOperationStep_onLobbyLogin)
+       2. eventually invokes LobbyClientMixin::onSuccessfulXxxLogin
+          (which raises the LobbyConnection state and calls the
+          LobbyRequestCallback vtable slots documented in
+          finding_lobby_flow.md)
+```
+
+The intermediate dispatch table (opcode -> handler addr) for the
+LobbyProtoDown opcodes is **TBD**. From the outbound-side "next
+expected inbound opcode" markers seen in this pass, the inbound
+opcodes we can predict are:
+
+```text
+After client sends ...        expected server reply opcode
+0x03 small ACK                0x0D
+0x04 small ACK                0x0F  (note: same value as outbound!)
+0x0B chara-make data          0x0E
+0x0F service sub-op           0x10
+```
+
+So the LobbyProtoDown opcode space includes at least {0x0D, 0x0E,
+0x0F, 0x10}, plus the still-unidentified opcodes that trigger the
+four `onSuccessfulXxx` handlers.
+
 ## Assessment
 
 ```text
 Confirmed:
-  - Four outbound IPC opcodes on the lobby channel: 0x1F5 (LobbyLogin),
-    0x05 (ServiceLogin), 0x06 (GameLogin), 0x1F6 (CharaMake).
-  - Payload sizes: 56 / 160 / 480 / 120 bytes (the body part inside
-    the segment-3 IPC).
-  - All four share a session_id at +0x00 from LobbyClient+0x0c.
+  - EIGHT outbound IPC opcodes on the lobby channel (up from four).
+    Main request packets:
+      0x1F5 LobbyLogin       (56 B)
+      0x05  ServiceLogin    (160 B)
+      0x06  GameLogin       (480 B)
+      0x1F6 CharaMake       (120 B)
+    Sub-operation / ACK packets:
+      0x03  small ACK         (32 B)
+      0x04  small ACK         (40 B)
+      0x0B  PutCharaMakeData (480 B; chunked stream)
+      0x0F  service sub-op   (160 B)
+  - All eight share a session_id at +0x00 from LobbyClient+0x0c.
   - Phase 2 and 3 carry the version handshake constants 0x6E and
     0x1347 at fixed offsets +0x0A and +0x0C.
   - Two credentials (A 32 bytes, B 32 bytes) are sent in phases 2 and
     3, both copied via strncpy from LobbyLoginOperation+0x38 / +0x8c.
   - After each successful send, LobbyConnection+0x8c flips to state 4
     until the matching onSuccessfulXxxLogin handler moves it on.
+  - The chara-make PutData (opcode 0x0B) is a CHUNKED stream: mode
+    byte (+0x10) has its high bit set on non-final chunks; server
+    must reassemble.
 
 Likely (High):
   - LobbyConnection IS the network manager: RaptureChannelManager
