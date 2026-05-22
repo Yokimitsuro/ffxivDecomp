@@ -23,6 +23,58 @@ command/game/gamecommandbaseclass.lua line 2663 (fire stub)
 command/game/attackcommand.lua          full read (366 lines)
 ```
 
+## Correction (EXE validation, 2026-05-23)
+
+A subsequent Ghidra pass surfaced an apparent contradiction between
+the names and the existing EXE annotations:
+
+```text
+Lua binding                EXE class/method (RTTI confirmed)
+-----------                ---------------------------------
+_executeCommand            PlayerBase::executeCommand
+                           (thunk at 0x006de650, real body in
+                           unanalysed region)
+_callServerOnCommand       PlayerBase::callServerOnCommand
+                           (thunk at 0x006de680, real body unanalysed)
+                           SIGNATURE: void(ExecuteParameters const&)
+_doServerOnCommand         PlayerBase::doServerOnCommand
+                           (thunk at 0x006de690)
+                           SIGNATURE: void(ExecuteParameters const&)
+```
+
+`finding_lua_to_exe_command_bridge.md` (older finding) confirms that
+`_callServerOnCommand` and `_doServerOnCommand` build a
+`PacketRequestBase` derivative and dispatch via the Zone channel —
+they ARE the wire path.
+
+A pre-existing Ghidra comment claimed `_executeCommand` was "LOCAL
+counterpart of _callServerOnCommand — executes a command client-side
+without a server round-trip" and "Special command id 24105 routes
+here only". That comment is **inconsistent** with the Lua flow,
+where `Player:command()` (uy9l5s89r57y9rr.lua:1911) calls
+`_executeCommand` UNCONDITIONALLY for every action.
+
+Two possible reconciliations:
+
+1. **All three bindings build packets**, with `_executeCommand` being
+   the "front-end / initiate" path and the other two being post-event
+   relays (the names "callServer" and "doServer" reflecting that they
+   handle server-pushed events rather than originating the request).
+2. **`_executeCommand` is purely local**, and the actual wire send
+   happens elsewhere — either inside a different Lua function not
+   yet inspected, or via a C++-side hook on the action.
+
+The current best inference (option 1) is consistent with:
+- The Lua flow making `_executeCommand` the unconditional outbound.
+- The 3 bindings sharing the same Functor mechanism + signature.
+- 1.x's design pattern of "every action goes through a single
+  outbound type".
+
+But this remains unconfirmed until the unanalysed bodies are
+disassembled. The sections below describe the OBSERVED LUA FLOW;
+treat the "wire send" attribution as the leading hypothesis, not
+proven fact.
+
 ## The Outbound Path — `Player:command()` (Client → Server)
 
 The front-end entry point called from UI/hotkey. Triggered when the
