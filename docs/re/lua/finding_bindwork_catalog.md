@@ -254,6 +254,15 @@ Likely (Medium):
     the payload's "field id" field matches the binding's actorId. So
     1010 is BOTH a system actor id AND the on-wire opcode for "HP
     update".
+  - EXE-side validation: the WRITE counterpart (_updateWork) is
+    pinned at FUN_006e85e0 (renamed in Ghidra to lua_updateWork_impl).
+    It takes (structName, slotName, field0, field1) string args from
+    ExecuteParameters and builds a WorkPath that is broadcast via
+    FUN_006ce1c0 + FUN_00767fc0. The READ side (_bindWork) does NOT
+    appear as a string literal in the EXE -- its name lookup probably
+    bypasses the standard Lua-to-C++ string-name path. That is
+    consistent with binding IDs being on-wire opcodes (numeric, no
+    string round-trip needed at runtime).
 
 Speculative:
   - The "id range" structure is so deliberate that there may be
