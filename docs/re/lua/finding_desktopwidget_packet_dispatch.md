@@ -162,44 +162,102 @@ opcode + payload; the client decides the styling.
 (Typo "Recieved" preserved from binary.)
 
 This is invoked when the **client previously asked for some data**
-and the server replies. It contains a switch over a key/sub-type
-string:
+and the server replies. Full switch over a string subKey:
 
 ```lua
 function DesktopWidget:processRecievedRequestedDataForWidget(actor, subKey, payload, ...)
-  -- switch on subKey:
-  if subKey == "activegl" then
-    -- update ActiveGuildleve sub-widget
-    ...
-  elseif subKey == "glHist" then
-    -- update GuildleveHistory widget; call setDetailData
-    local w = self:getWidget(3, "GuildleveHistoryWidget")
-    if w ~= nil then
-      w:setDetailData(...)
+  local journalDetailType = nil
+
+  if subKey == "qtdata" then
+    journalDetailType = 1  -- Quest data
+  elseif subKey == "qtmap" then
+    -- Update quest markers on MapNavigationWidget
+    local w = self:getWidget(3, "MapNavigationWidget")
+    if w then
+      local n = select("#", ...)
+      if n > 0 then
+        w:initMarkerList(n)
+        for i = 1, n do w:addMarkerList(i, select(i, ...)) end
+        local questId = tostring(select(1, ...))
+        ...
+        w:setQuestMarker(questId)
+        w:dispMarker(L9_2)
+      end
     end
-  elseif (other subKeys) then
-    ...
+  elseif subKey == "activegl" then
+    journalDetailType = 2  -- Active Guildleve data
+  elseif subKey == "glHist" then
+    -- GuildleveHistory widget setDetailData
+    local w = self:getWidget(3, "GuildleveHistoryWidget")
+    if w then w:setDetailData(...) end
   end
 
-  if matchedSubWidget ~= nil then
-    self:processUpdateJournalDetailWidget(matchedSubWidget, ...)
+  if journalDetailType ~= nil then
+    self:processUpdateJournalDetailWidget(journalDetailType, payload, ...)
   end
 end
 ```
 
-So "requestedData" is a **family** of replies, each tagged by a
-string subKey. The two seen explicitly:
+### requestedData subKey table
 
 ```text
-"activegl"   -> Active Guildleve sub-widget update
-"glHist"     -> Guildleve History widget detail data
+subKey       payload destination                    journalDetailType
+-----------  ------------------------------------   -----------------
+"qtdata"     Journal Quest detail panel (type 1)    1
+"qtmap"      MapNavigationWidget quest markers      (none; handled inline)
+"activegl"   Journal Active-Guildleve panel (typ 2) 2
+"glHist"     GuildleveHistoryWidget detail data     (none; handled inline)
 ```
 
-More subKeys exist higher up in the function body that we didn't
-fully read this pass. The pattern is: client sends a "give me X"
-request; server replies with `packetType="requestedData"` and the
-subKey identifying which `X` came back; DesktopWidget routes it to
-the matching widget.
+Pattern: client sends "give me X" request; server replies with
+`packetType="requestedData"` + subKey identifying the data class.
+For Journal-type subKeys (`qtdata`, `activegl`), the routing collapses
+to a numeric journalDetailType (1 = Quest, 2 = Active Guildleve)
+which then drives `processUpdateJournalDetailWidget`.
+
+## `processUpdateContentsInformation` — bonus dispatcher
+
+A fourth game-side dispatcher discovered above
+`processUpdateGeneralNotificationDialog` in the same file. Maps
+content-kind numeric ids to widget names:
+
+```lua
+function DesktopWidget:processUpdateContentsInformation(actor, A2, A3)
+  ...
+  local kind = actor:getKindContentsInformation()
+  local idx, widgetName
+  if kind == 1 then
+    idx, widgetName = 1, "GuildleveExecutionWidget"
+  elseif kind == 2 then
+    idx, widgetName = 2, "ChocoboCaravanWidget"
+  else
+    return
+  end
+  self:updateContentsInformation(actor, idx, widgetName, A2, A3)
+end
+```
+
+```text
+content kind  widget
+------------  ---------------------------
+     1        GuildleveExecutionWidget
+     2        ChocoboCaravanWidget
+```
+
+`updateContentsInformation` then routes by an **action** sub-string:
+
+```text
+action     behaviour
+---------  -----------------------------------------------------
+"start"    open the contents widget (allocate a free slot)
+"update"   find existing widget; update its data
+"finish"   (no body; reserved)
+"cancel"   close the contents widget
+```
+
+So `updateContentsInformation(actor, idx, "GuildleveExecutionWidget",
+"start", payload)` is how a server starts a Guildleve session on
+the client.
 
 ## DesktopWidget as the central UI broker
 
