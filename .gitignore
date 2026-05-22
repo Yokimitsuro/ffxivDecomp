@@ -1,0 +1,10 @@
+config/project.local.yml
+tools/local/
+lua/decompiled/
+captures/raw/
+game/
+*.exe
+*.dll
+*.dat
+*.index
+*.sqpack

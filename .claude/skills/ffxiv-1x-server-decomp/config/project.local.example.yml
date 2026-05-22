@@ -1,0 +1,47 @@
+# Local-only configuration for the FFXIV 1.x server research workspace.
+# Copy this file to:
+#   config/project.local.yml
+# Then adjust paths for your machine.
+#
+# IMPORTANT:
+# - Do not commit project.local.yml.
+# - Do not commit game binaries, game assets, extracted proprietary dumps, or unluac.jar.
+# - Keep this repository focused on findings, packet notes, structs, flows, and server requirements.
+
+repo:
+  url: "https://github.com/Yokimitsuro/ffxivDecomp.git"
+  local_path: "."
+  expected_branch: "main"
+
+game:
+  root: 'E:\Program Files (x86)\SquareEnix\FINAL FANTASY XIV'
+  exe_search_patterns:
+    - "*.exe"
+  lua_search_patterns:
+    - "*.lua"
+    - "*.luac"
+    - "*.lub"
+  extracted_lua_input:
+    - "lua/source"
+    - "lua/bytecode"
+  decompiled_lua_output: "lua/decompiled"
+
+ghidra:
+  # Optional. Claude should still verify the currently loaded Ghidra program through MCP.
+  expected_program_name: null
+  expected_architecture: null
+  exports_dir: "ghidra/exports"
+
+tools:
+  # Recommended: copy unluac.jar to tools/local/unluac.jar and keep it gitignored.
+  unluac_jar: "tools/local/unluac.jar"
+  java_command: "java"
+
+output:
+  exe_findings: "docs/re/exe"
+  lua_findings: "docs/re/lua"
+  correlation_findings: "docs/re/correlation"
+  packet_docs: "docs/packets"
+  struct_docs: "docs/structs"
+  flow_docs: "docs/flows"
+  server_requirements: "docs/server"
