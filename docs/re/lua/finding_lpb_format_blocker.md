@@ -8,6 +8,12 @@
 > described below **no longer applies** — 2,670 of 2,671 scripts decode
 > on the first pass.
 >
+> **UPDATE 2 — the filename cipher is also cracked.** It is an involution
+> (`a..j <-> 9..0`, `k..z <-> z..k`, case-insensitive, non-alnum passes
+> through). See `docs/re/lua/finding_name_cipher_cracked.md` and the
+> bulk catalogue at `docs/re/lua/catalog.md`. Every obfuscated path
+> component under `client/script/` is now a known plaintext.
+>
 > The original blocker write-up is preserved unedited below for the
 > record (it documents the wrong hypotheses that were ruled out before
 > the correct algorithm landed).
