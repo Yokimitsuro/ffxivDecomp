@@ -31,6 +31,12 @@ EXE functions (renamed in this pass):
   FUN_00da5110  LobbyClient_onSuccessfulGameLogin       (phase 3 ACK handler)
   FUN_00da5190  LobbyClient_onSuccessfulCharaMake       (phase 4 -- optional)
   FUN_00da4f30  LobbyClient_CloseLobbyConnection
+  FUN_00da5300  LobbyClient_gcCompletedOpsAndCheckActive
+  FUN_00dad770  LobbyOperation_ctor                     (base class ctor)
+  FUN_00dad750  LobbyRequestCallback_ctor               (callback base ctor)
+  FUN_00da84c0  LobbyLoginOperation_ctor                (0xE0 bytes; inherits LobbyOperation)
+  FUN_00da88e0  InitOperationStep_ctor                  (0x6c bytes; inherits LobbyRequestCallback)
+  FUN_00da89f0  LobbyLoginOperationStep_ctor            (0xb8 bytes; inherits LobbyRequestCallback)
 
 Configuration strings:
   0x00f90100 "net_lobby_port"               port override key
@@ -73,6 +79,75 @@ The phases:
                                                      over
 4.  (optional)         ->  onSuccessfulCharaMake     chara-make op completed
                                                      (5 sub-types)
+```
+
+## Class hierarchy (RTTI-confirmed)
+
+```text
+LobbyOperation                                      base class for "a command to the lobby server"
+  +0x00 vftable
+  +0x08 LobbyClient*   parent / owner
+  +0x0c id field
+  +0x10 status = 1     initial = "pending"
+  +0x18 ?              embedded substructure (FUN_00d353f0 init)
+  +0x30/+0x34 context dwords
+└─ LobbyLoginOperation                              total 0xE0 bytes; the persistent op that survives across phases 2 and 3
+     +0x38 Utf8String  credential A
+     +0x8c Utf8String  credential B
+
+LobbyRequestCallback                                base class for "the request-side observer"
+  +0x00 vftable        (the LobbyRequestCallback vtable documented below)
+├─ InitOperationStep                                total 0x6c bytes; first of the setup pair
+│    +0x04 step_type = 0
+│    +0x08 context dword
+│    +0x0c flag byte
+│    +0x10 Utf8String  (endpoint or handshake blob)
+│    +0x54 uint16      derived from string + 0x15
+│    +0x68/+0x69 byte flags
+└─ LobbyLoginOperationStep                          total 0xb8 bytes; second of the setup pair
+     +0x04 step_type = 1
+     +0x08 context dword
+     +0x0c flag byte
+     +0x10..+0x54  data via FUN_00da8390 (Utf8String + derived field)
+```
+
+The class graph shows **two unrelated hierarchies** for the lobby flow:
+
+- **Operations** (`LobbyOperation` / `LobbyLoginOperation`) are the
+  client-side wrappers around a server command. They live in queues on
+  the `LobbyClient` and carry the per-attempt state (credentials,
+  status, retry counter).
+- **Callbacks** (`LobbyRequestCallback` / `InitOperationStep` /
+  `LobbyLoginOperationStep`) are the observer-side objects that
+  receive the four-phase ACKs. They live alongside the Operation and
+  hold per-step transient state.
+
+The `LobbyRequestCallback` *base* vtable is what the four
+`onSuccessful*` handlers invoke — i.e. the table mapped in the
+"LobbyRequestCallback vtable (consolidated)" section below. Concrete
+subclasses (the two OperationSteps) override the relevant slots.
+
+## Operation queues on `LobbyClient`
+
+```text
+LobbyClient+0x044  "setup queue"          drained when there is no live
+                                          connection. Holds the
+                                          (InitOperationStep, LobbyLoginOperationStep)
+                                          pair that drives the segment-9 /
+                                          segment-10 encryption handshake
+                                          plus the initial auth.
+
+LobbyClient+0x1a8  "login queue"          drained when the connection is
+                                          already in state 3/4/5. Holds
+                                          LobbyLoginOperation objects, one
+                                          per login attempt. Each persistent
+                                          op carries the flow across phases
+                                          1..3 of one full login attempt.
+
+LobbyClient+0x1b0  "active op head"       set when a queue head is currently
+                                          being processed (used by
+                                          gcCompletedOpsAndCheckActive to
+                                          decide whether to clean up).
 ```
 
 ## Phase 0: `doStartLobbyLogin` — kick the login flow
@@ -347,19 +422,26 @@ Speculative:
     cred1/cred2/the crypt key.
 
 Next test:
-  - Decompile FUN_00da4f30 (LobbyClient_CloseLobbyConnection) to
-    confirm the teardown sequence and any sticky state that survives
-    across reconnects.
-  - Decompile FUN_00da5300 (the isReadyToLogin gate in
-    doStartLobbyLogin) to see exactly which connection states allow
-    the login attempt.
-  - Decompile the operation-step constructors (FUN_00da84c0,
-    FUN_00da88e0, FUN_00da89f0) to extract the wire shape of the
-    setup-pair and login packets. These constructors carry the
-    LobbyProtoUp packet builder calls.
-  - Identify the LobbyProtoDownCallbackInterface vtable in .rdata
-    (RTTI string at 0x0131a0d0) and check which addresses populate
-    its slots -- that confirms the "incoming side" of phases 1..4.
+  - DONE: FUN_00da4f30 is the close path -- it just clears
+    LobbyClient+0x08 (the connection ptr) after invoking
+    connection->vtable[0] (release).
+  - DONE: FUN_00da5300 is not "isReadyToLogin"; it is
+    gcCompletedOpsAndCheckActive -- it walks LobbyClient+0x1a8 (the
+    login queue), removes completed ops, and returns true if the
+    queue is still active. It runs AFTER the state check, not before
+    it.
+  - DONE: the three operation-step constructors are now named and
+    their layouts documented. The actual wire-payload writers are
+    deeper: in the step's vtable+0x58 ("kick"), which builds and
+    sends via a LobbyProtoUpPacketBuilder. Pinning those is the next
+    real step.
+  - PENDING: identify the LobbyProtoDownCallbackInterface vtable in
+    .rdata (RTTI at 0x0131a0d0) -- finds which concrete functions
+    populate slots +0x10..+0x44 of the LobbyRequestCallback for
+    incoming packets.
+  - PENDING: decompile InitOperationStep::vtable[0x58] (the "kick")
+    to see exactly which segment-9 ENCRYPTION_INIT bytes the client
+    sends first.
 
 Commit suggestion:
   docs(re/exe): document lobby login flow (4 phases + chara-make)
