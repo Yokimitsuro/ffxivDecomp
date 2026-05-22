@@ -55,10 +55,18 @@ The base class identifies command categories by **hardcoded id
 ranges**, not by sheet flags. Recovered ranges:
 
 ```text
-22001                Harvest command (single id)
-22002..22009         Craft commands  (8 ids: standard, bold, etc.)
-22012 22016          Craft commands that REQUIRE a target on the wire
-                     (already pinned in CraftCommand override)
+22001                Harvest command (abstract / single id; isHarvestCommand)
+22002                Mining           (subtype, dispatched by HarvestJudge)
+22003                Felling          (subtype)
+22004                Fishing          (subtype)
+22005..22009         Other player-issued action commands (TBD)
+22002..22009         "isPlayerCommand" range (player-issued action umbrella;
+                     INCLUDES the three gathering subtypes above — see
+                     finding_harvest_judge.md)
+22012, 22016         Craft commands that REQUIRE a target on the wire
+                     (pinned in CraftCommand override)
+22502                Tutorial-only craft command (excluded from standard
+                     craft list per CraftJudge inventory)
 23000..23999         "isHostilityCommand = false" range  (non-hostile —
                      buffs / support / heal etc.)
 24105                Client-only command (special-cased in
@@ -67,6 +75,15 @@ ranges**, not by sheet flags. Recovered ranges:
 12014                Chocobo ride toggle (special post-action: checks
                      rider state via static actor 320013)
 ```
+
+> **Correction**: an earlier version of this document attributed
+> `22002..22009` to "craft" based on `GameCommandBaseClass:isPlayerCommand`.
+> That method name was misread — `isPlayerCommand` is a generic
+> "player-issued action" umbrella, NOT "isCraftCommand". The base
+> `isCraftCommand` returns `false` and is overridden by subclasses;
+> the actual craft commands begin at 22012 / 22016 (target-required)
+> and the tutorial craft id 22502 sits in a separate band. See
+> `finding_harvest_judge.md` for the gathering-subtype evidence.
 
 The base implementations of `isPlayerCommand` and `isAttackCommand`
 likewise use range tests; subclasses (e.g. CraftCommand,
