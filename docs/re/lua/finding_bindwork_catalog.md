@@ -77,10 +77,31 @@ on any chara on screen flows through binding 1010.
 
 ```text
 3001  commandAcquired                  bitmap of acquired commands
-3002  command                          equipped commands
+                                       (EXE-confirmed via
+                                        Actor_isCommandAcquired @
+                                        0x00573760; the wire idx is
+                                        cmdId - 26001, validating the
+                                        +26000 rebase from finding_
+                                        actor_work_schemas.md)
+3002  command                          equipped commands (array)
 3003  commandCategory                  per-slot category
-3004  commandBorder                    per-slot border colour / lock?
-3006  property                         actor property bitset
+3004  commandBorder                    per-slot BASE INDEX into command[]
+                                       (used as offset start by
+                                        Actor_getCommandAt_complex @
+                                        0x005737a0; NOT a UI color
+                                        flag as initially assumed)
+3005  ?? bazaar-related master flag    NEW BINDING DISCOVERED
+                                       (Actor_isBazaarDealer @ 0x573460
+                                        reads 3005 as a gate, then
+                                        checks 4001/4002. Likely
+                                        charaWork.eventSave.bazaar
+                                        master flag bound through
+                                        slot 3005, not 4xxx as the
+                                        Lua-side schema implied.)
+3006  property                         actor property bitset (32 bools)
+                                       (EXE-confirmed via
+                                        PlayerBase_check_charaWork_state_
+                                        via_binding_ids @ 0x006de510)
 ```
 
 ### Range 4000–4099 — CharaBase eventTemp (`charaWork.eventTemp.*`)
@@ -102,13 +123,25 @@ base actorClassId is shown here from the npcbaseclass.lua scan.)
 
 ### Range 100000–100999 — Player (`playerWork.*`)
 
+ALL EXE-confirmed via the dedicated getter functions in the
+0x005738b0..0x00573940 range (one C function per binding id).
+
 ```text
 100001  variableCommandConfirmRaise    confirm-on-raise toggle
+        (getter: Player_getVariableCommandConfirmRaise @ 0x005738b0)
 100002  variableCommandConfirmWarp     confirm-on-warp toggle
+        (getter: Player_getVariableCommandConfirmWarp  @ 0x005738d0)
 100003  variableCommandContent         content-flag bitfield
+        (getter: Player_getVariableCommandContent      @ 0x005738f0)
 100004  variableCommandPlaceDriven     place-driven action mode
+        (getter: Player_getVariableCommandPlaceDriven_at_idx @ 0x573910)
+                                       takes idx arg (array)
 100005  variableCommandEmoteSit        sit-emote variant
-100006  (unused)
+        (getter: Player_getVariableCommandEmoteSit_default10001 @
+                  0x00573940)
+                                       DEFAULT = 10001 if unset
+                                       (1.x base "sit" emote id)
+100006  (unused)                       confirmed unused (no EXE getter)
 100007  initialTown                    the player's chosen starting town
 ```
 
