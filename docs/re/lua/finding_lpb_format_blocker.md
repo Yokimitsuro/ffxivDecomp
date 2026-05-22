@@ -1,4 +1,20 @@
-# Finding: `.lpb` Script Format — Custom SE Wrapper, Obfuscated Names, Standard Decompilers Reject
+# Finding: `.lpb` Script Format — Resolved (XOR 0x73 over a 13-byte header)
+
+> **UPDATE — algorithm now known.** The format is a one-byte XOR (`0x73`)
+> over Lua 5.1 bytecode preceded by a 13-byte header. After decode,
+> stock `unluac.jar` decompiles the result to readable Lua source. See
+> `docs/re/exe/finding_lpb_loader_chain.md` for the worked-out
+> algorithm and end-to-end validation. The Lua-side analysis blocker
+> described below **no longer applies** — 2,670 of 2,671 scripts decode
+> on the first pass.
+>
+> The original blocker write-up is preserved unedited below for the
+> record (it documents the wrong hypotheses that were ruled out before
+> the correct algorithm landed).
+
+---
+
+# Original finding (now superseded — kept for the record)
 
 Characterise the FFXIV 1.x on-disk Lua script container and explain why
 straightforward Lua decompilation is **not currently possible** with the

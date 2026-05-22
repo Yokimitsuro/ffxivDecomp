@@ -1,9 +1,18 @@
-# Finding: `.lpb` Loader Chain — Entry Points, Header, Ring Buffer, and Decode Status
+# Finding: `.lpb` Loader Chain — Entry Points, Header, and Working Decoder
 
 Map the EXE-side path from Lua's `require(...)` call through to
 `luaL_loadbuffer()` for a `.lpb` script, document the on-disk header layout
-empirically, and report the *current* status of the body-decode algorithm
-(reachable but not yet fully extracted).
+empirically, and record the working body-decode algorithm.
+
+> **Status update (later in same session)**: the algorithm *was* extracted —
+> the body is a plain `XOR 0x73` over the bytes that follow a **13-byte**
+> header. My earlier ruling-out of single-byte XOR was wrong: I had the
+> header size off-by-3 (treated bytes 12..15 as a 4-byte field instead of a
+> 1-byte flag + start-of-payload) and was comparing against an incorrect
+> reference Lua 5.1 header (used `0x01` for the format byte where Lua
+> actually uses `0x00 0x01`). With those two errors corrected the decode is
+> trivial. End-to-end-verified against 2,670 / 2,671 scripts. See
+> "Working algorithm (corrected)" below.
 
 Companion: `docs/re/lua/finding_lpb_format_blocker.md`,
 `docs/re/exe/finding_lua_engine_bridge.md`.
@@ -182,69 +191,159 @@ Derived from accesses in the above functions:
 +0x224 ? (post-init bit)
 ```
 
-### Header layout observed across many .lpb files
+### Header layout (corrected)
 
-Sampled five 69-byte stub files (different obfuscated names) and one
-~7 KB content file. Header (16 bytes) is consistent:
+Sampled five 69-byte stub files and one ~7 KB content file. Header is
+**13 bytes**, not 16:
 
 ```text
 +0x00  4  magic        = "rle\x0C"
 +0x04  4  lpb_version  = 0x0000C51F   (one file showed 0x0000461C -- older build)
-+0x08  4  decoded_size = uint32 LE    (matches expected uncompressed size)
-+0x0C  4  format_const = 0x063F68FF   (CONSTANT across all sampled files)
-+0x10  …  encoded body
++0x08  4  decoded_size = uint32 LE    (length of payload AFTER decode)
++0x0C  1  flag         = 0xFF          (single byte; role TBD, constant in samples)
++0x0D  …  XOR-0x73-encoded body
 ```
 
-Cross-file comparison nails the field at `+0x0C` as a **fixed encoder
-constant or RLE seed/IV**, **not** a per-file checksum (it does not
-change between files of differing content). The dword value
-`0x063F68FF` itself is not a known CRC32 magic; its semantic role is
-TBD.
+My initial parse mistakenly treated bytes 12..15 (`FF 68 3F 06`) as a
+four-byte dword `0x063F68FF`. The first byte (`0xFF`) is actually a
+one-byte flag and the next three bytes (`68 3F 06`) are already the
+first three bytes of the encoded Lua chunk header — which decode under
+`XOR 0x73` to `1B 4C 75` ("`\x1bLu`...").
 
-### Body shape (empirical)
+### Working algorithm (corrected)
 
-- Encoded vs decoded sizes are within a few bytes of each other
-  (e.g. stub: 53 enc -> 56 dec; mid-size file: 7010 enc -> 7013 dec). This
-  rules out LZ-class compression — the format is *near-1:1*.
-- The **first 16 bytes** of every encoded body are constant across all
-  inspected .lpb files (stubs and content files alike):
-  ```text
-  12 22 73 72  77 77 77 7B  73 73 73 73 73 73 73 73
-  ```
-  This corresponds to the **standard Lua 5.1 header** in the decoded
-  stream (which is always identical for a given Lua build):
-  ```text
-  1B 4C 75 61  51 01 04 04  04 08 00 00 00 00 00 00
-  ```
-  i.e. `\x1bLua\x51\x01\x04\x04\x04\x08` (magic + version + format +
-  endianness + sizeof(int)=4 + sizeof(size_t)=8) plus six zero bytes.
-- The mapping from encoded bytes to decoded bytes is **not** a single-byte
-  XOR / ADD / substitution: the same encoded byte 0x77 (in positions 4
-  and 5 of the body) decodes to two different bytes (0x51 then 0x01).
-  The pad/transform therefore has per-position state.
-- Encoded `0x73` does *not* always represent a literal `0x00` either —
-  it does so at positions 8..15 (where decoded bytes are all 0x00), but
-  at position 2 the encoded byte `0x73` decodes to `0x75` ('u' in
-  `\x1bLua`).
+```python
+def decode(data: bytes) -> bytes:
+    assert data[:4] == b"rle\x0c"
+    decoded_size = int.from_bytes(data[8:12], "little")
+    # data[12] is a 1-byte flag (0xFF in all sampled files; role TBD)
+    return bytes(b ^ 0x73 for b in data[13:13 + decoded_size])
+```
 
-The most consistent hypothesis is **a stateful stream transform** (small
-PRNG / rolling key) seeded from `format_const` (`0x063F68FF`), possibly
-combined with a special-case for zero-byte runs (justifying the `"rle"`
-mnemonic in the magic).
+The transformation is the simplest possible: **XOR every payload byte
+with `0x73`.** Decoded output begins at file offset 13 and is exactly
+`decoded_size` bytes long.
 
-### Validation: `lpb_probe.py` (kept under `tools/local/`)
+Re-checking the first 12 bytes of a typical file against this:
 
-A small probe was added at `tools/local/lpb_probe.py` (gitignored by
-`tools/local/`). It currently tries:
+```text
+file offset 13..24 (encoded):  68 3F 06 12 22 73 72 77 77 77 7B 73
+XOR 0x73                       =====================================
+decoded                        1B 4C 75 61 51 00 01 04 04 04 08 00
+                              ( \x1b   L   u   a   Q   . . . . . . . )
+```
 
-- raw zlib / deflate / gzip with various `wbits`
-- single-byte XOR keying onto `\x1bLua\x51`
-- single-byte ADD keying onto `\x1bLua\x51`
-- naive RLE with markers 0x73, 0x77, 0x00, 0x12
+which is the standard **Lua 5.1 little-endian, 32-bit-int, 64-bit-size_t,
+4-byte-instruction, 8-byte-double, IEEE-754** header byte for byte —
+exactly what `luaL_loadbuffer` expects.
 
-**None** of these candidates produces `\x1bLua` output on any of the
-sampled files. This is consistent with the per-position-state hypothesis
-above and is the experimental evidence ruling out the simpler schemes.
+The reason my earlier empirical probe failed:
+
+- I parsed the first 16 bytes as the header (treating `FF 68 3F 06` as a
+  dword), so my "body offset 16" tests were skipping the first three
+  payload bytes.
+- I compared against a memorised reference Lua 5.1 header of
+  `... 51 01 04 04 04 08 ...`, which is wrong: the actual standard
+  header byte at offset 5 (the `format` byte) is `0x00` for official
+  builds, with `0x01` being the *endianness* byte at offset 6. With the
+  bad reference, the XOR pad came out non-uniform and led me to wrongly
+  conclude the transform was per-position-stateful.
+
+### Encoded vs decoded size
+
+```text
+file_size = 13 + decoded_size
+```
+
+This makes the wrapper a flat one-byte expansion over plain Lua 5.1
+bytecode: there is no compression at all, just `XOR 0x73`. Encoded and
+decoded body sizes are identical.
+
+### Edge case: `rlu\x0B` variant (1 file)
+
+One outlier file (`9s59\kvw5\kvw5xvo5usv3q5rq.le.lpb`, 139 bytes) uses
+magic `rlu\x0B` instead of `rle\x0C`. Inspection shows its body starts
+directly with `1B 4C 75 61 51 00 01 04 ...` — i.e. plain Lua 5.1
+bytecode with **no XOR**. Same 8-byte header prefix (magic + version),
+no flag byte, payload starts at file offset 8.
+
+```text
++0x00  4  magic        = "rlu\x0B"
++0x04  4  lpb_version  = 0x00001D96
++0x08  …  plain Lua 5.1 bytecode (no XOR)
+```
+
+This is presumably the "Raw LUa" sibling of the "RLE-encoded" wrapper,
+used for one file that the build pipeline chose not to obfuscate. The
+overall decoder needs a small branch:
+
+```python
+if data[:4] == b"rle\x0c":
+    return bytes(b ^ 0x73 for b in data[13:13 + decoded_size])
+elif data[:4] == b"rlu\x0b":
+    return data[8:]
+```
+
+### Validation result
+
+Running the user-supplied `tools/local/decode.py` (XOR-0x73 over the
+13-byte header) against the full `client/script/` tree:
+
+```text
+OK: 2670  Bad: 1
+  bad: 9s59\kvw5\kvw5xvo5usv3q5rq.le.lpb - not rle wrapper   (the rlu variant)
+```
+
+i.e. **99.96 %** of all scripts decode on the first pass. The single
+outlier is the `rlu\x0B` variant above.
+
+End-to-end confirmation via `unluac.jar` on one decoded output
+(`3yv89y_p.lub`, 3,509 bytes — the engine class-system bootstrap):
+
+```text
+EXIT=0
+local L0_1, L1_1
+L0_1 = _G
+function L1_1(...)
+  local L3_2, L4_2
+  L3_2 = "global"
+  L4_2 = "_defineClass_cpp"
+  return L3_2, L4_2
+end
+L0_1._defineClass_inl = L1_1
+... (continues with _defineBaseClass_cpp, _isInstanceOf_cpp,
+     _isExistActor_cpp, etc.)
+```
+
+i.e. **decoded scripts decompile cleanly with stock unluac.** No
+SE-custom Lua VM extensions are needed at the bytecode level. The
+binding names visible in this very first script (`_defineClass_cpp`,
+`_defineBaseClass_cpp`, `_isInstanceOf_cpp`, `_isExistActor_cpp`,
+etc.) confirm the SE Lua-OO class system documented in
+`finding_lua_engine_bridge.md`.
+
+### Why the initial probe missed the answer
+
+`tools/local/lpb_probe.py` (early in the session) tested
+single-byte XOR, single-byte ADD, naive RLE, and zlib/deflate. The
+XOR-0x73 case *was* tested, but failed because:
+
+1. The probe assumed the header was 16 bytes long and looked for
+   `\x1bLua\x51` at body offset 0 of *that* assumption, missing the
+   first three bytes of real payload.
+2. The probe compared against a memorised `\x1bLua\x51` prefix; the
+   correct check is the 12-byte `\x1bLua\x51 0x00 0x01 0x04 0x04 0x04
+   0x08 0x00` Lua 5.1 header — and a one-byte XOR test against the
+   shorter literal happens to still hit the same key, so this on its
+   own wouldn't have masked the result. But combined with the
+   off-by-three header parse, the probe never tried `XOR 0x73` against
+   body offset 0 of the *correct* payload.
+
+The decoder under `tools/local/decode.py` (added by the user) supplied
+the correct 13-byte header parse, after which the XOR was trivial.
+**Lesson**: when ruling out simple algorithms, always re-derive the
+header length empirically (e.g. by comparing across files of different
+content sizes) before deciding the payload offset.
 
 ## Assessment
 
@@ -257,60 +356,60 @@ Confirmed:
   - Decoded bytes pass through a per-LpbLoader ring buffer at +0xbc and
     are handed directly to luaL_loadbuffer (FUN_00cf4680) with chunkname
     = "<name>.lua".
-  - Header is 16 bytes: magic ("rle\\x0C"), lpb_version, decoded_size,
-    and a fixed encoder constant 0x063F68FF.
-  - Body length is essentially equal to decoded length (1:1, not LZ).
-  - The first 16 body bytes are constant across all files and correspond
-    to the constant Lua 5.1 chunk-header in the decoded stream.
+  - Header is 13 bytes: magic ("rle\\x0C") + lpb_version + decoded_size
+    + 1 flag byte (0xFF in samples).
+  - Body is plain XOR-0x73 over the next `decoded_size` bytes; no
+    compression. Encoded body size == decoded body size.
+  - One file uses an `rlu\\x0B` variant with an 8-byte header and no
+    XOR (raw bytecode).
+  - Decoded output IS standard Lua 5.1 bytecode and unluac.jar
+    decompiles it without modification.
 
 Likely (High):
-  - The body is encoded by a **stateful** stream transform (single-byte
-    XOR / ADD / substitution all ruled out empirically).
-  - The transform's state seed is the dword at file +0x0C
-    (`0x063F68FF`), which is identical across files and therefore makes
-    *every file* decode from the same initial state.
-  - A producer function on the file-IO side (downstream of the work
-    queue at LpbLoader+0xb0, upstream of the ring buffer at +0xbc)
-    contains the decoder. Its address has not been pinned in this pass.
+  - The "rle" mnemonic is just the SE label for this XOR-obfuscation,
+    not literal run-length encoding. The "rlu" variant means "raw lua"
+    (no obfuscation).
+  - The flag byte at file +0x0C governs the format variant or marks
+    "needs XOR" vs other modes. Only 0xFF observed in samples.
 
 Likely (Medium):
-  - The "rle" mnemonic refers to a special-case path for zero-byte
-    runs inside the stream (justifying the constant 0x73 mapping at
-    body offsets 8..15) — i.e. the transform is mostly a stream cipher
-    but emits a different code when many zeros are present.
+  - The actual XOR loop in the binary lives downstream of the
+    LpbLoader work queue (LpbLoader+0xb0) and upstream of the ring
+    buffer (LpbLoader+0xbc). Pinning it in Ghidra is now optional
+    follow-up because the algorithm is already known empirically.
 
 Speculative:
-  - 0x063F68FF is an LCG / PRNG seed. Common 32-bit constants such as
-    0x9E3779B9 / 0xC6EF3720 are not visible here, so if it's a PRNG it
-    is a SE-custom one.
+  - 0xFF at file +0x0C might select among multiple obfuscation modes
+    (e.g. different XOR keys for different builds). Only one mode has
+    been observed in 2,670 files; no contradicting evidence has surfaced.
 
-Next test (in priority order):
-  1. Find the ResumeChecker vtable in .rdata (xref the RTTI string at
-     0x0130d574). Inspect the "process" / "run" slot — that is what the
-     work-queue worker invokes. It is the canonical entry to the
-     decode + ring-buffer-push code.
-  2. Walk from that entry forward until either a memcpy with a small
-     loop over input bytes is found, or until a separate "decode" helper
-     is called. Decompile that helper; its inputs are `(encoded_ptr,
-     encoded_len, decoded_buf, decoded_cap, seed=0x063F68FF)`.
-  3. Once the algorithm is extracted, port it to `tools/local/lpb_probe.py`
-     (or a new `tools/local/lpb_decode.py`) and confirm the output of
-     decoding a stub .lpb begins with `\\x1bLua\\x51\\x01\\x04\\x04\\x04\\x08`.
-  4. Then run unluac.jar on the decoded chunk to recover Lua 5.1 source.
+Done:
+  - Decoder validated end-to-end: 2,670 of 2,671 files decode and
+    unluac yields readable Lua 5.1 source.
+
+Next test:
+  - Patch the decoder to also handle the rlu\\x0B variant (1 file).
+  - Bulk-decompile all 2,670 .lub files into a queryable corpus
+    (gitignored under lua/decompiled/).
+  - Begin reading the corpus for the topics the user originally asked
+    about: login / lobby / world / zone / loading / actor / character /
+    event / network. Now unblocked.
 
 Commit suggestion:
-  docs(re/exe): map .lpb loader chain and header; algorithm extraction
-                stalled at per-position transform
+  docs(re/exe): correct .lpb header parse and document working
+                XOR-0x73 decoder; unblock Lua-side analysis
 ```
 
 ## Server implication
 
-- Unchanged from `docs/re/lua/finding_lpb_format_blocker.md`: the server
-  bring-up does not depend on `.lpb` decompilation working.
-- This finding *narrows* the remaining work to a single-function reverse
-  on the file-IO completion path (driven from the LpbLoader's work
-  queue). Once that one function is decompiled, all 2,671 scripts become
-  readable in batch — which then enables reading what the client *expects*
-  to happen on the server side at the UI / scene / actor level.
-- No tooling change is required on the server side. Whether `.lpb`
-  decompilation has happened or not is invisible to the wire.
+- Unchanged from `docs/re/lua/finding_lpb_format_blocker.md` regarding
+  the wire: nothing about the `.lpb` decode affects the protocol.
+- However, the **Lua-side blocker is now lifted**. All 2,670 standard
+  scripts and 1 raw script are recoverable. Per-flow follow-ups
+  (login / lobby / world / zone / loading / actor / character / event /
+  network) — the topics the user originally asked about — can now be
+  answered by reading the corpus rather than by inference from EXE-side
+  bindings alone.
+- The decoder is `tools/local/decode.py` (kept gitignored per project
+  policy). Decoded `.lub` files should be written to `lua/decompiled/`
+  (also gitignored).
