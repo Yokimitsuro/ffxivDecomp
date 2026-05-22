@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ghidra__get_current_address",
+      "mcp__ghidra__list_segments"
+    ]
+  }
+}
