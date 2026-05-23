@@ -1,17 +1,18 @@
 ---
 name: ffxiv-1x-server-decomp
-version: 0.3.0
-description: Use this skill when reverse engineering Final Fantasy XIV 1.0 / 1.23b client EXE binaries with Ghidra MCP and Lua scripts/bytecode in order to document client behavior, packet formats, opcode meanings, client state machines, EXE-Lua relationships, and server requirements for a compatible MeteorReborn-style server.
+version: 0.4.0
+description: Use this skill when reverse engineering Final Fantasy XIV 1.0 / 1.23b client EXE binaries with Ghidra MCP, Lua scripts/bytecode, and FFXIVTool static data exports in order to document client behavior, packet formats, opcode meanings, client state machines, EXE-Lua-data relationships, and server/content requirements for a compatible MeteorReborn-style server.
 ---
 
 # FFXIV 1.x Server Decomp Skill
 
 ## Mission
 
-Analyze Final Fantasy XIV 1.0 / 1.23b client behavior using two evidence sources:
+Analyze Final Fantasy XIV 1.0 / 1.23b client behavior using three evidence sources:
 
 1. **Native EXE analysis through Ghidra MCP**
 2. **Lua script / Lua bytecode analysis**
+3. **FFXIVTool static client data exports**
 
 The goal is to understand what the client expects from a compatible server:
 
@@ -23,6 +24,8 @@ The goal is to understand what the client expects from a compatible server:
 - zone entry and scene loading sequence
 - script calls into native functions
 - server responses required to make the client progress
+- static client data required to populate a compatible server database
+- relationships between client data tables, Lua behavior, and native EXE packet/state handling
 
 This is an interoperability research skill. It is not a request to recreate or redistribute proprietary source code.
 
@@ -32,9 +35,11 @@ Prefer:
 - function roles and cautious names
 - packet/struct layouts with confidence labels
 - EXE ↔ Lua cross-references
+- EXE/Lua ↔ static data table cross-references
 - call graphs
 - state-machine notes
 - server implementation requirements
+- server content/database import requirements
 - committed Markdown findings
 
 Do **not** output large proprietary decompiled source dumps. Do **not** help bypass DRM, account systems, payments, anti-cheat, authentication, or online service protections. Do **not** create cheating, botting, exploit, or live-service abuse functionality. Focus on documenting client behavior needed for a lawful compatible server implementation.
@@ -67,6 +72,15 @@ game:
 
 tools:
   unluac_jar: "tools/local/unluac.jar"
+
+ffxivtool:
+  local_tool_dir: "tools/local/ffxivtool"
+  exports_dir: "data/client_exports/ffxivtool"
+  decode_csv: "data/client_exports/ffxivtool/decode_csv"
+  mycsv: "data/client_exports/ffxivtool/mycsv"
+  raw_csv: "data/client_exports/ffxivtool/raw_csv"
+  shoplist: "data/client_exports/ffxivtool/ShopList.txt"
+  ignore_temp: true
 ```
 
 Required behavior:
@@ -77,13 +91,14 @@ Required behavior:
 4. Use the configured `game.root` only as an input location. Findings must go into the research repository, not inside the game install directory.
 5. Use `tools.unluac_jar` only for Lua bytecode owned/provided by the user. Preserve the original bytecode and write decompiled output under `lua/decompiled/`.
 
-Before any EXE or Lua task, report:
+Before any EXE, Lua, or static data task, report:
 
 ```text
 Config loaded: yes/no
 Repo local path:
 Game root:
 unluac.jar path:
+FFXIVTool exports path:
 Ghidra MCP connected: yes/no/unknown
 ```
 
@@ -122,13 +137,14 @@ Before working, confirm:
 ```text
 Research repo/worktree:
 Current branch:
-Target type: EXE / Lua / EXE-Lua correlation / packet / server requirement
+Target type: EXE / Lua / EXE-Lua correlation / FFXIVTool data / packet / server requirement / content import requirement
 Loaded Ghidra program, if EXE work:
 Binary name:
 Architecture:
 Image base:
 Target address/function/opcode/script:
 Lua source or bytecode path, if Lua work:
+FFXIVTool export path/table, if data work:
 Requested output:
 ```
 
@@ -150,13 +166,18 @@ A work unit can be:
 - one state-machine transition
 - one call chain
 - one client flow, such as character select or zone entry
+- one FFXIVTool export folder
+- one static data table
+- one table relationship
+- one content/database import requirement
+- `ShopList.txt` or one vendor/shop data group
 
 Create a claim note before starting:
 
 ```text
 CLAIMED:
 Target:
-Type: EXE / Lua / Correlation / Packet / Server
+Type: EXE / Lua / Correlation / FFXIVToolData / Packet / Server / ContentImport
 Reason:
 Starting hypothesis:
 Expected output:
@@ -326,6 +347,157 @@ A correlation can be useful even if incomplete.
 
 ---
 
+## Step 2D: FFXIVTool Client Data Export Analysis
+
+Use this path for static client data exported by FFXIVTool Data Ver.13.03.01.0 for FFXIV patch `2012.09.19.0001` / 1.23b.
+
+Expected export layout:
+
+```text
+data/client_exports/ffxivtool/
+├─ decode_csv/
+├─ mycsv/
+├─ raw_csv/
+└─ ShopList.txt
+```
+
+Local-only FFXIVTool files may exist here:
+
+```text
+tools/local/ffxivtool/
+├─ ffxivtool.exe
+├─ ffxivtool.ini
+└─ temp/
+```
+
+Rules:
+
+1. Treat `data/client_exports/ffxivtool/` as static client data.
+2. Treat `tools/local/ffxivtool/` as local tooling only.
+3. Never commit `ffxivtool.exe`, `ffxivtool.ini`, `temp/`, or `*.tmp`.
+4. Ignore all temporary files generated by FFXIVTool.
+5. Do not decompile FFXIVTool unless specifically needed to understand an unknown export format.
+6. Prefer analyzing exported CSV/TXT files first.
+7. Do not inspect hundreds of tables manually. Always generate an automated catalog first.
+8. Compare `raw_csv`, `decode_csv`, and `mycsv` before deciding which export is canonical for server import.
+9. Treat `ShopList.txt` as legacy/manual shop or vendor reference data until proven otherwise.
+
+### Export Folder Working Hypotheses
+
+These must be verified by comparing table counts, headers, row counts, columns, and sample rows:
+
+```text
+raw_csv    = closest to raw client table values
+decode_csv = decoded/human-readable export, usually best starting point for server import
+mycsv      = FFXIVTool custom/export format, possibly user-adjusted or easier to browse
+ShopList.txt = auxiliary shop/vendor list, not generated temporary data
+```
+
+### Automated Catalog First
+
+Before deep analysis, produce an automated catalog with:
+
+```text
+filename
+export source: raw_csv / decode_csv / mycsv / ShopList
+row count
+column count
+detected type/header rows
+non-empty column count
+likely category
+server relevance: critical / useful / later / cosmetic / unknown
+notes
+```
+
+Required catalog outputs:
+
+```text
+docs/data/ffxivtool_export_overview.md
+docs/data/ffxivtool_table_catalog.csv
+docs/data/ffxivtool_table_catalog.md
+docs/server/content_requirements/ffxivtool_import_plan.md
+```
+
+### Server Relevance Classification
+
+Classify each table as one of:
+
+```text
+critical
+useful
+later
+cosmetic
+unknown
+```
+
+Prioritize tables related to:
+
+```text
+zones
+maps
+territories
+actors
+NPCs
+BNPCs
+items
+commands
+actions
+shops
+quests
+levequests
+events
+player appearance
+classes
+jobs
+spawn data
+```
+
+For each important table, document:
+
+```text
+Table name:
+Export source:
+Row count:
+Column count:
+Detected type/header row:
+Likely category:
+Server relevance:
+Important columns:
+Related tables:
+Server-side use:
+Unknowns:
+Next test:
+```
+
+### Canonical Import Decision
+
+When comparing export folders, determine:
+
+```text
+Which folder is most readable?
+Which folder preserves original IDs best?
+Which folder has the most complete rows/columns?
+Which folder should be canonical for server DB import?
+Which folder should be kept as raw verification reference?
+Where do Command and Item exports fit if they are separate from SSD exports?
+How does ShopList.txt relate to shop/vendor tables?
+```
+
+### FFXIVTool Data Output Rule
+
+Every useful FFXIVTool data finding must end with:
+
+```text
+Client data observation:
+Server database implication:
+Possible import table:
+Related EXE/Lua evidence needed:
+Unknown fields:
+Validation test:
+```
+
+---
+
 ## Step 3: Build Minimal Server Understanding
 
 For every work unit, answer:
@@ -339,6 +511,8 @@ Does this depend on a packet?
 Does this depend on Lua event/state?
 Does this depend on a native EXE callback?
 What must a compatible server send, store, or simulate?
+Does this depend on static client data from FFXIVTool exports?
+Which data table likely provides the referenced ID/name/object/content?
 What remains unknown?
 ```
 
@@ -351,6 +525,7 @@ Minimum server behavior:
 Required fields:
 Unknown fields:
 Packet ordering requirement:
+Static data/database requirement:
 Validation test:
 ```
 
@@ -374,12 +549,16 @@ EXE -> Lua or Lua -> EXE bridge documented
 Client loading/state transition identified
 Struct offsets documented with confidence
 Server-side behavior requirement extracted
+Static client data table classified and cataloged
+Content/database import requirement extracted
+raw_csv/decode_csv/mycsv relationship documented
+Shop/vendor data relationship documented
 ```
 
 Time limit:
 
 ```text
-Do not spend more than 10 minutes on a single EXE function or Lua function without producing a finding.
+Do not spend more than 10 minutes on a single EXE function, Lua function, or individual data table without producing a finding or catalog entry.
 ```
 
 Stop iterating if:
@@ -393,6 +572,9 @@ The Lua decompiler output is too noisy to improve locally
 The work is blocked by unknown struct layout
 The work is blocked by unknown virtual call target
 The next action is broader call-graph or script search, not more local edits
+The table has been classified and has no immediate server relevance
+The table requires EXE/Lua correlation before more meaning can be inferred
+Only localization/cosmetic data is present
 ```
 
 When stuck, write a partial finding. Partial progress is valid.
@@ -420,6 +602,10 @@ State transition
 Send/receive relationship
 Relevant string/xref
 Server implementation requirement
+Static data table category/relevance
+Server content/database import requirement
+FFXIVTool export relationship
+Shop/vendor data relationship
 ```
 
 Before committing, verify location:
@@ -448,6 +634,10 @@ docs/re/lua/finding_<script_or_function>.md
 docs/re/correlation/finding_<lua_exe_bridge>.md
 docs/packets/packet_<opcode_or_name>.md
 docs/server/requirement_<flow_or_packet>.md
+docs/data/ffxivtool_export_overview.md
+docs/data/ffxivtool_table_catalog.csv
+docs/data/ffxivtool_table_catalog.md
+docs/server/content_requirements/ffxivtool_import_plan.md
 ```
 
 Commit examples:
@@ -460,6 +650,11 @@ git commit -m "docs: document EXE packet dispatch candidate"
 ```bash
 git add docs/re/lua/finding_loading_state.md docs/re/correlation/finding_loading_event_bridge.md
 git commit -m "docs: document Lua loading state bridge"
+```
+
+```bash
+git add docs/data/ffxivtool_export_overview.md docs/data/ffxivtool_table_catalog.csv docs/server/content_requirements/ffxivtool_import_plan.md
+git commit -m "docs: catalog FFXIVTool client data exports"
 ```
 
 If only notes were updated, commit notes.
@@ -568,6 +763,23 @@ Do not start with the whole client. Start with server-critical flows:
 9. player init packet handling
 10. actor spawn handling
 11. loading complete / zone-ready state
+12. static client data catalog from FFXIVTool exports
+13. Item and Command data, if exported separately
+14. zones/maps/territories data
+15. NPC/actor/shop/quest/levequest/event data
+```
+
+For FFXIVTool exports, first catalog and prioritize:
+
+```text
+Item
+Command
+zone/map/territory tables
+NPC/actor tables
+shop/vendor tables
+quest/levequest tables
+event/object tables
+text/localization tables
 ```
 
 For Lua, first search for strings and functions related to:
@@ -607,14 +819,5 @@ Allowed:
 - debugging client/server protocol behavior
 - explaining call graphs and state machines
 - writing test server requirements
-
-Not allowed:
-
-- large proprietary source reconstruction or redistribution
-- dumping large decompiled EXE or Lua source wholesale
-- DRM bypass
-- authentication/account/payment bypass
-- anti-cheat bypass
-- cheating/botting/exploit functionality
-- attacking live services
-- redistributing copyrighted game binaries/assets/code
+- cataloging exported static client data
+- creating server database/content import plans from user-provided CSV/TXT exports

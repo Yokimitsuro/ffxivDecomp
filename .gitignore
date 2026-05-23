@@ -4,3 +4,18 @@ tools/local/
 lua/bytecode/
 lua/decompiled/
 *.log
+*.tmp
+
+# FFXIVTool tool binary + temp must never be committed
+tools/local/ffxivtool/
+**/ffxivtool.exe
+**/ffxivtool.ini
+**/temp/
+
+# Bulk FFXIVTool client data exports - kept locally only.
+# The repo keeps the catalog (docs/data/) and the generator scripts (tools/);
+# regenerate the exports locally with FFXIVTool when needed.
+data/client_exports/ffxivtool/decode_csv/
+data/client_exports/ffxivtool/raw_csv/
+data/client_exports/ffxivtool/mycsv/
+data/client_exports/ffxivtool/ShopList.txt
