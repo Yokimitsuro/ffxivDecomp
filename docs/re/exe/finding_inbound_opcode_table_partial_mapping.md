@@ -51,11 +51,81 @@ ENTRY  ADDR           LAYER 3 METHOD                    LUA HOOK / PURPOSE
  43    0x00fdfc2c ->  FUN_0075a060
                        reader: FUN_0089c9d0 (1 uint arg)
                        router: FUN_0089ca80
+
+ 44    0x00fdfc30 ->  FUN_0075a0e0
+                       reader: FUN_0089c800 (1 byte)
+                       router: FUN_0089c8b0
+
+ 45    0x00fdfc34 ->  FUN_0075a160
+                       reader: FUN_0089cf60 (string + ushort)
+                       router: FUN_0089d030
+
+ 46    0x00fdfc38 ->  FUN_0075a200
+                       reader: FUN_008a2e70 (byte + uint + byte)
+                       router: FUN_008a2f30
+
+ 47    0x00fdfc3c ->  FUN_0075a280
+                       reader: FUN_008a2f70 (1 byte)
+                       router: FUN_008a3020
+
+ 48    0x00fdfc40 ->  FUN_0075a300
+                       reader: FUN_008a3050 (1 byte)
+                       router: FUN_008a3100
+
+ 35    0x00fdfc0c ->  FUN_0076c0d0
+                       CHAT MESSAGE handler -- reads:
+                         [4]: name string
+                         [1]: msg pointer
+                         [2]: type byte
+                         [3]: ushort id (chat id?)
+                         [+0xc]: payload
+                         FUN_007858c0 writer (chat channel A)
+
+ 36    0x00fdfc10 ->  FUN_0076c3b0
+                       CHAT message handler variant -- reads:
+                         [9]: name (40 chars max at offset 9)
+                         [0]: payload pointer
+                         [2]: byte type
+                         [1]: byte subtype
+                         FUN_00785aa0 writer (chat channel B)
+
+ 37    0x00fdfc14 ->  FUN_0076c220
+                       CHAT message handler with TWO names --
+                         [9]:  name1
+                         [0x29]: name2 (offset 41 = 1 byte + 40 chars)
+                         [1, 0]: payload
+                         [2]: byte type
+                         [+0x49]: extra payload
+                         FUN_007859b0 writer (chat channel C)
 ```
 
-Pattern continues for ~220 more entries. Mapping every one would
-require systematic walking but doesn't change the architectural
-understanding -- the model is established.
+## Identified Subsystem: Chat Message Handlers (Entries 35-37)
+
+Three CONSECUTIVE entries in the table are CHAT MESSAGE handlers:
+
+```text
+Entry 35 (0x0076c0d0): CHAT TYPE A
+  - Single name + msg id + payload
+  - Probably "/say" or "/shout" -- broadcast chat
+
+Entry 36 (0x0076c3b0): CHAT TYPE B
+  - Single name (40-char max) + payload
+  - Probably "/yell" or system chat
+
+Entry 37 (0x0076c220): CHAT TYPE C (with TWO names)
+  - name1 + name2 (both 40-char max)
+  - Probably "/tell" -- sender + receiver
+  - Extra payload field at +0x49
+```
+
+So opcodes 35, 36, 37 are the THREE inbound chat message variants.
+This matches the FFXIV 1.x chat channel design:
+- Entry 35 = open broadcast (/say-style)
+- Entry 36 = system message
+- Entry 37 = whisper (/tell with sender + recipient)
+
+This is a SIGNIFICANT subsystem identification -- 3 opcodes mapped
+to chat dispatch.
 
 ## Observation: ~6 Consecutive Unused Slots (28-34)
 
