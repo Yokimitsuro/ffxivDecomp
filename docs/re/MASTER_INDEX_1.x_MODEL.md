@@ -13,11 +13,18 @@ Last updated: 2026-05-23 (45+ commits this day).
 ✓ Inbound dispatch table FOUND at 0x00fdfb80 (~224 entries)
 ✓ 3-layer handler architecture: Reader -> Router -> MyPlayer method
 ✓ 2-path inbound model: Correlation (Path A) + Push table (Path B)
-✓ 4 opcode-to-Lua-hook mappings confirmed:
+✓ 18 opcode-to-handler mappings identified:
    Entry 0  -> _onTouch (begin, flag=1)
    Entry 1  -> _onTouch (end,   flag=0)
    Entry 2  -> _onMoveAtSit
-   Entry 38 -> _onReceiveDataPacket
+   Entry 3  -> complex custom dispatcher
+   Entry 28-34 -> 6 UNUSED slots (reserved)
+   Entry 35 -> CHAT TYPE A (/say-style broadcast)
+   Entry 36 -> CHAT TYPE B (/yell or system)
+   Entry 37 -> CHAT TYPE C (/tell with sender+recipient)
+   Entry 38 -> _onReceiveDataPacket (generic 192B data)
+   Entries 39-48 -> various small-payload events
+✓ CHAT SUBSYSTEM identified at entries 35-37 (3 message variants)
 ✓ Inbound/outbound opcode spaces are SEPARATE
 ✓ PacketRequestBase correlation via 64-bit composite id
 ✓ 6 PacketBufferTmpl classes (3 channels x 2 directions)
