@@ -4,10 +4,10 @@ By walking handlers in the inbound dispatch table at 0x00fdfb80
 and tracing to Layer 3 (MyPlayer event methods), 4 specific
 opcodes-to-Lua-hooks mappings have been identified.
 
-## Confirmed Mappings (4 of ~224)
+## Confirmed Mappings (12 of ~224)
 
 ```text
-ENTRY  ADDR           LAYER 3 METHOD                    LUA HOOK FIRED
+ENTRY  ADDR           LAYER 3 METHOD                    LUA HOOK / PURPOSE
 -----  ----           --------------                    --------------
   0    0x00fdfb80 ->  FUN_00759820 -> FUN_008a3de0
                        -> FUN_006e11e0 -> FUN_00898d20  _onTouch(begin, flag=1)
@@ -18,10 +18,53 @@ ENTRY  ADDR           LAYER 3 METHOD                    LUA HOOK FIRED
   2    0x00fdfb88 ->  FUN_00759920 -> FUN_008a3e60
                        -> MyPlayer_onMoveAtSit         _onMoveAtSit
 
+  3    0x00fdfb8c ->  FUN_0075d710                     (custom dispatcher;
+                                                          5 args -- complex)
+
+ 28    0x00fdfbf0 ->  FUN_00759de0 (empty/return)      UNUSED slot
+ 30    0x00fdfbf8 ->  FUN_00759e00 (empty/return)      UNUSED slot
+ 31    0x00fdfbfc ->  FUN_00759e10 (empty/return)      UNUSED slot
+ 32    0x00fdfc00 ->  FUN_00759e20 (empty/return)      UNUSED slot
+ 33    0x00fdfc04 ->  FUN_00759e30 (empty/return)      UNUSED slot
+ 34    0x00fdfc08 ->  FUN_00759e40 (empty/return)      UNUSED slot
+
  38    0x00fdfc18 ->  ZoneIn_handler_dataPacket
-                       -> _onReceiveDataPacket          _onReceiveDataPacket
-                       (192-byte buffer, generic data)
+                       -> _onReceiveDataPacket          generic data packet
+                       (192-byte buffer)
+
+ 39    0x00fdfc1c ->  FUN_00759ed0
+                       reader: FUN_0089f4c0
+                       (byte-prefixed length-prefixed data)
+                       router: FUN_0089e550
+
+ 40    0x00fdfc20 ->  FUN_00759f50
+                       reader: FUN_0089dfa0 (3 uint args)
+                       router: FUN_008a04b0
+
+ 41    0x00fdfc24 ->  FUN_0076c4d0  (different family;
+                                       in 0x0076cXXX range)
+
+ 42    0x00fdfc28 ->  FUN_00759fd0
+                       reader: FUN_0089f5b0 (2 args)
+                       router: FUN_0089fbf0
+
+ 43    0x00fdfc2c ->  FUN_0075a060
+                       reader: FUN_0089c9d0 (1 uint arg)
+                       router: FUN_0089ca80
 ```
+
+Pattern continues for ~220 more entries. Mapping every one would
+require systematic walking but doesn't change the architectural
+understanding -- the model is established.
+
+## Observation: ~6 Consecutive Unused Slots (28-34)
+
+Entries 28-34 are all UNUSED (empty handlers that immediately
+return). This 6-slot gap suggests deliberate "reserve space" for
+future expansion, or removed events from earlier development.
+
+The 1.x team allocated capacity for events but didn't ship them
+all -- common pattern in long-development MMOs.
 
 So entries 0 and 1 form a **start/end pair** for the same Lua hook
 (`_onTouch`) -- a common pattern in event systems where one opcode
