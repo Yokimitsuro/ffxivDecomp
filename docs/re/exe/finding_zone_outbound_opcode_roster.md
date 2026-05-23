@@ -47,29 +47,58 @@ opcode   size    function name                                    notes
                  (FUN_0075ecd0)
 ```
 
-## The "Large Checksummed" Family
+## The "Large Container" Family — ALSO opcode 0x12d
 
-Four functions build large packets (~2208 bytes per local_940 buffer)
-using `FUN_00776760` (likely the packet builder) and `FUN_00d3aae0`
-(hash/checksum). Each uses a different INBOUND opcode (set by the
-builder, not hardcoded in the caller):
+**CORRECTION (2026-05-23)**: Decompiling `FUN_00776760` reveals all
+four large-sender functions ALSO use opcode **0x12d** (not different
+opcodes). So 0x12d is actually a **MULTI-PURPOSE TAGGED CONTAINER**,
+not just a script error packet.
+
+The 200-byte 0x12d packet layout (per FUN_00776760):
 
 ```text
-ZoneOut_send_large_simple              @ 0x0075e1c0   no checksum hash
-ZoneOut_send_large_checksummed_v1      @ 0x0075e3a0   with FUN_00d3ab60+aae0 hash
-ZoneOut_send_large_checksummed_v2      @ 0x0075e510   variant of v1
-ZoneOut_send_large_checksummed_v3      @ 0x0075e230   variant of v1 with byte cond
+offset   size      field                      notes
+------   -------   ----------------------     -------------------------
++0x00    4B        opcode (= 0x12d)
++0x04    4B        size (= 200 decimal)
++0x08    16B       ??? (header / framing)
++0x18    4B        param_1                     (caller-provided)
++0x1c    4B        param_2
++0x20    4B        param_3
++0x24    4B        param_4
++0x28    1B        discriminator (param_5)    THE TAG / VARIANT SELECTOR
++0x29    32B       hash / nonce / id (param_6: 4×uint64)
++0x49    128B      payload (param_7: 32 dwords)
+TOTAL    201 B (size field reports 200, +1 header byte)
 ```
 
-These probably correspond to:
-- World state initial push (~2 KB compressed per actor)
-- Inventory bulk push
-- Quest journal full sync
-- Other "large initial data load" packets
+The byte at offset +0x28 is the discriminator that selects the
+variant. Same opcode, but the SEMANTICS depend on the discriminator
+value. This is a common compression pattern: one opcode in the
+switch, many sub-cases inside.
 
-The exact opcodes for these are encoded inside `FUN_00776760` and
-need further analysis. The pattern suggests opcodes in the 0x1XX or
-0x2XX range with the same general 2 KB payload.
+Four senders use this builder, each providing a different
+discriminator byte:
+
+```text
+ZoneOut_send_large_simple              @ 0x0075e1c0   no hash (param_5 specific)
+ZoneOut_send_large_checksummed_v1      @ 0x0075e3a0   with hash + char check
+ZoneOut_send_large_checksummed_v2      @ 0x0075e510   variant
+ZoneOut_send_large_checksummed_v3      @ 0x0075e230   variant with byte test
+```
+
+Plus the chunked-script-error sender (FUN_0076e270) which uses 0x12d
+DIRECTLY without the FUN_00776760 builder — it writes its own
+discriminator byte (probably a "log" type) and chunks long messages
+into multiple 0x12d packets.
+
+So 0x12d is the **"large structured packet" container** carrying:
+- Script error reports (one variant; chunked at 200B each)
+- World/inventory bulk state pushes (3 variants)
+- Anti-tamper challenge data (likely another variant)
+
+The server-side handler for 0x12d reads the discriminator byte and
+routes to per-variant handlers.
 
 ## Cross-Reference with Segment-Level Opcodes
 
