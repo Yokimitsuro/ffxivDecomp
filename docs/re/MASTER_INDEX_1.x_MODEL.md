@@ -2,25 +2,51 @@
 
 This document is the **executive summary** of the reverse-engineering
 work completed during the multi-session research effort. The 1.x
-client model is decomposed across ~40 findings covering: wire
+client model is decomposed across ~46 findings covering: wire
 protocol, schemas, native binding APIs, gameplay subsystems.
 
-Last updated: 2026-05-23 (38 commits this day).
+Last updated: 2026-05-23 (45+ commits this day).
+
+## Latest Discoveries (post-original-index)
+
+```text
+✓ Inbound dispatch table FOUND at 0x00fdfb80 (~224 entries)
+✓ 3-layer handler architecture: Reader -> Router -> MyPlayer method
+✓ 2-path inbound model: Correlation (Path A) + Push table (Path B)
+✓ 4 opcode-to-Lua-hook mappings confirmed:
+   Entry 0  -> _onTouch (begin, flag=1)
+   Entry 1  -> _onTouch (end,   flag=0)
+   Entry 2  -> _onMoveAtSit
+   Entry 38 -> _onReceiveDataPacket
+✓ Inbound/outbound opcode spaces are SEPARATE
+✓ PacketRequestBase correlation via 64-bit composite id
+✓ 6 PacketBufferTmpl classes (3 channels x 2 directions)
+✓ +28 small _u bindings (Debug/Table/SpreadSheet/CutScene)
+✓ ItemBaseClass_common inventory (190+ functions, 4686 lines)
+✓ NormalItem level-adjust formula (3 regimes; under-level penalty)
+✓ Grand Company correction (1.x had GC, not FC; FC came in ARR)
+```
 
 ## Quick Reference
 
 ```text
-Documented native bindings:    ~437 (Lua-to-C++ API)
-Documented wire opcodes:        9 outbound (0x12d-0x135) + segment
-                                 layer
-Documented binding ids:         25+ catalogued (1xxx-5xxx, 100xxx,
-                                 200xxx, 300xxx, 400xxx, 500xxx)
-EXE-validated facts:            binding id == runtime field id (1:1)
-                                 bit-packed storage (4 type tags)
-                                 wire opcode 0x12f = work-sync
-                                 wire opcode 0x135 = subscribe-by-id
-                                 wire opcode 0x12d = tagged container
-Gameplay subsystems documented: ~15 major subsystems
+Documented native bindings:     ~465 (Lua-to-C++ API)
+Documented wire opcodes:         9 outbound (0x12d-0x135) +
+                                  ~224 inbound dispatch table
+Documented binding ids:          25+ catalogued (1xxx-5xxx, 100xxx,
+                                  200xxx, 300xxx, 400xxx, 500xxx)
+EXE-validated facts:             binding id == runtime field id (1:1)
+                                  bit-packed storage (4 type tags)
+                                  wire opcode 0x12f = work-sync
+                                  wire opcode 0x135 = subscribe-by-id
+                                  wire opcode 0x12d = tagged container
+                                  inbound dispatch table at 0x00fdfb80
+                                  3-layer handler architecture
+                                  2-path inbound model (Path A + B)
+                                  6 PacketBufferTmpl classes RTTI
+                                  4 inbound opcode mappings identified
+Gameplay subsystems documented:  ~16 major subsystems
+Coverage at architectural level: ~95%
 ```
 
 ## Documentation Map
