@@ -1,9 +1,19 @@
-# Finding: `CompanyGroup` — Free Company System (1.x)
+# Finding: `CompanyGroup` — Grand Company System (1.x)
 
-The Free Company-like organization system in 1.x. Built on
-`CommunityGroupBaseClass` (which extends `GroupBaseClass`). Players
-join a Company; each Company has a crest, name, ranks, and members
-with per-member rank tracking.
+**CORRECTION (2026-05-23)**: Originally interpreted as "Free Company"
+but historically Free Companies were an ARR concept (2013+). In
+1.x this is the **GRAND COMPANY** system (Maelstrom / Twin Adder /
+Immortal Flames) introduced in patch 1.20 (February 2011).
+
+The Grand Companies are the city-state-aligned military
+organizations that players can join. Each city-state has one GC:
+- **Maelstrom** (Limsa Lominsa)
+- **Order of the Twin Adder** (Gridania)
+- **Immortal Flames** (Ul'dah)
+
+Built on `CommunityGroupBaseClass` (which extends `GroupBaseClass`).
+Players join a Grand Company; each GC has a crest, name, ranks, and
+members with per-member GC rank.
 
 Sources read:
 
@@ -16,9 +26,14 @@ group/CommunityGroup/CompanyGroup.lua    515 lines (this file)
 ```text
 GroupBaseClass
   └── CommunityGroupBaseClass
-      ├── CompanyGroup       (Free Company; this finding)
-      └── RetainerGroup      (Retainer family; 496 lines, similar)
+      ├── CompanyGroup       (Grand Company -- THIS FINDING)
+      └── RetainerGroup      (Personal retainers -- separate finding)
 ```
+
+Note: "Company" here = Grand Company (military org per city-state),
+NOT Free Company (player-organized social guild from ARR onwards).
+The naming "Company" is preserved from the EXE/Lua corpus; the
+docs originally misinterpreted this as FC.
 
 ## `work` Schema (Community Group)
 
@@ -42,19 +57,27 @@ tier 2 = 32, tier 3 = 64, similar to FFXIV ARR's FC ranks).
 {rank, integer8}                    -- company tier/rank
 ```
 
-The crest is **4 stacked icons** (background + 3 overlays), similar
-to FFXIV ARR's company crest editor.
+The crest is **4 stacked icons** (background + 3 overlays). For
+Grand Companies these would be the GC heraldry (Maelstrom anchor,
+Twin Adder snake, Immortal Flames sun motif). ARR later reused
+this same 4-icon system for the player-customized FC crests.
 
 ### `_memberSave[i]._nesting` (per-member, 1 field)
 
 ```text
-{rank, integer8}                    -- per-member rank within FC
-                                       (e.g. 0=member, 1=officer, etc.)
+{rank, integer8}                    -- per-member rank within GC
+                                       (Storm Private -> Storm Captain
+                                        ladder; ~10 ranks per GC)
 ```
 
-So each member has ONE byte of state: their FC rank. Other per-
+So each member has ONE byte of state: their GC rank. Other per-
 member data (name, level, last login) comes from the broader actor
 system.
+
+1.x's Grand Company rank ladder (~10 ranks): from "Storm Private 3rd"
+up to "Storm Captain", "Storm Commander", etc. Each GC has parallel
+ranks with thematic names (Maelstrom = Storm, Twin Adder = Serpent,
+Immortal Flames = Flame).
 
 ## Sync Tags
 
@@ -152,24 +175,25 @@ isCurrent(player):
   return current ~= nil and self == current
 ```
 
-The constant **20002** is a category id for "current Free Company".
-A player has multiple community group memberships (FC, multiple
-linkshells, possibly Grand Company), and `getCommunityGroupCurrent`
-returns the player's currently-selected one for each category.
+The constant **20002** is the category id for "current Grand
+Company". Players can only be in ONE GC at a time (per 1.x design),
+so `getCommunityGroupCurrent(20002)` returns the player's chosen GC.
 
 The full category id range (catalog of community group types):
 
 ```text
-category id   purpose
------------   ---------------------------------
-20001         ?? (probably linkshell)
-20002         Company (Free Company)
-20003         ?? (probably retainer group)
+category id   purpose                          1.x release
+-----------   ------------------------------   -------------
+20001         Linkshells                       1.0 launch (Sep 2010)
+20002         Grand Company                    1.20 (Feb 2011)
+20003         Retainers                        1.0 launch
 ...
 ```
 
-(Specific ids beyond 20002 not yet pinned; would need to read
-`RetainerGroup.lua` + LinkshellGroup files.)
+The Free Company concept (player-organized social orgs with FC
+houses, FC crafted gear, FC commendations) was introduced in ARR
+in 2013. 1.x had only Grand Companies + Linkshells for player
+organizations.
 
 ## Assessment
 
