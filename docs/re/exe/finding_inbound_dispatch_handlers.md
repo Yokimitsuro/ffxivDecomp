@@ -81,20 +81,67 @@ So the **C++ side and Lua side are decoupled**: the C++ handler does
 state updates + flags; the Lua hook does game logic + UI updates.
 Same args (oldValue, newValue) flow through.
 
-## The Dispatch Table Around 0x00fd78XX
+## The Table at 0x00fd78XX — REVISED: It's a VTABLE, not opcode dispatch
 
-The function pointer to `Actor_handleActorMainStatChange` is stored
-at exactly **0x00fd78e4** (via DATA xref). Adjacent table entries
-likely point to handlers for other binding fields.
+**CORRECTION (2026-05-23 follow-up)**: After enumerating adjacent
+slots via `get_xrefs_from`, the table at 0x00fd78XX is now confirmed
+to be a **class vtable**, not an opcode dispatch table.
 
-The table is referenced by SOMEONE (the inbound dispatcher) but
-Ghidra has not auto-resolved the references — meaning the dispatcher
-function is in an unanalysed region or accessed via runtime address
-calculation (e.g. `table[opcode * 4]`).
+The 9+ function pointers in the table:
 
-Strategy to find the dispatcher: look for callers that LOAD from
-0x00fd78XX with a runtime-computed offset. This is the inbound
-packet processor's "switch by opcode" via jump table.
+```text
+0x00fd78d0 -> FUN_006dbea0  (tiny wrapper -- 1 line)
+0x00fd78d4 -> FUN_006f3420
+0x00fd78d8 -> FUN_006fb430
+0x00fd78dc -> FUN_006e02c0
+0x00fd78e0 -> FUN_006dc370  (small accessor)
+0x00fd78e4 -> Actor_handleActorMainStatChange (FUN_00704820)
+0x00fd78e8 -> FUN_00776340  (empty stub)
+0x00fd78ec -> FUN_006e3500
+0x00fd78f0 -> FUN_006eeb00
+```
+
+The functions are HETEROGENEOUS in size and behavior — some are
+empty stubs, some are accessors, some are full handlers. This is
+the signature pattern of a **C++ class vtable with virtual methods**,
+not a function table indexed by opcode.
+
+So my earlier interpretation that "the function pointer at 0x00fd78e4
+is in a dispatch table indexed by binding id" was WRONG. The slot is
+just one of many virtual methods of a class (probably the Actor or
+some intermediate base class).
+
+The naming `Actor_handleActorMainStatChange` for 0x00704820 still
+fits — it IS the function that handles main stat changes — but it's
+invoked via virtual dispatch from a method elsewhere, not directly
+via opcode table lookup.
+
+## Where Does the Inbound Dispatch Actually Happen Then?
+
+The real opcode-to-handler dispatch must be elsewhere. Candidates:
+
+1. Inside the unanalysed code region near the Zone IPC receive
+   loop (~0x004dXXXX or ~0x00daXXXX).
+2. A switch statement inside a function that consumes the inbound
+   packet queue (related to FUN_00dae520 / ZoneClient_pumpConnectionState).
+3. Inside one of the un-named functions that calls
+   `Actor_handleActorMainStatChange` indirectly via the vtable.
+
+The actual dispatcher would have a switch like:
+
+```c
+switch (packet->opcode) {  // some literal 0x130, 0x131, etc.
+  case 0x130: handler_0x130(packet); break;
+  case 0x131: handler_0x131(packet); break;
+  ...
+}
+```
+
+This switch hasn't been pinned yet. Strategy: look for functions
+that REFERENCE multiple sender functions (e.g. callers of both
+`ZoneOut_send_opcode_0x130_*` and `ZoneOut_send_opcode_0x131_*`)
+— such a function probably handles the SYMMETRY between send and
+receive of related opcodes.
 
 ## Other Lua String Mappings Found
 
