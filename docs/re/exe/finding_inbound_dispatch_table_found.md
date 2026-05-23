@@ -26,47 +26,59 @@ Following the caller chain backwards from a known handler:
    TABLE.
 ```
 
-## Table Layout (Sampled)
+## Table Layout (Sampled — stride 4 bytes / one function pointer per slot)
 
 ```text
-ADDR          POINTER       FUNCTION TYPE
-----          -------       --------------
-0x00fdfb80 -> FUN_00759a60   (sampled; small handler)
-0x00fdfb88 -> FUN_00759820   (sampled; small handler)
-0x00fdfbc0 -> FUN_00759a60   (default? or another small)
-0x00fdfbe0 -> FUN_00759cd0   ZoneIn_handler_vtable_dispatch_slot23
-                              (calls packet->vtable[0x5c])
-0x00fdfbf0 -> FUN_00759de0   (empty/no-op)
-0x00fdfbf8 -> FUN_00759e00   (empty/no-op)
-0x00fdfbfc -> FUN_00759e10
-0x00fdfc00 -> FUN_00759e20
-0x00fdfc04 -> FUN_00759e30
-0x00fdfc08 -> FUN_00759e40
-0x00fdfc0c -> FUN_0076c0d0
-0x00fdfc10 -> FUN_0076c3b0
-0x00fdfc14 -> FUN_0076c220
-0x00fdfc18 -> ZoneIn_handler_dataPacket_calls_onReceiveDataPacket
-                              (the "data" packet handler -- Lua bridge)
-0x00fdfc1c -> FUN_00759ed0
-0x00fdfc20 -> FUN_00759f50
-0x00fdfc24 -> FUN_0076c4d0
-0x00fdfc28 -> FUN_00759fd0
-0x00fdfc2c -> FUN_0075a060
-0x00fdfc30 -> FUN_0075a0e0
-0x00fdfc34 -> FUN_0075a160
-0x00fdfc38 -> FUN_0075a200
-0x00fdfc3c -> FUN_0075a280
-0x00fdfc40 -> FUN_0075a300
-0x00fdfc60 -> FUN_0075a630
-0x00fdfc80 -> FUN_0075a920
-0x00fdfca0 -> FUN_00776cf0
-0x00fdfd00 -> FUN_005c5c80   ZoneIn_handler_default_noop (returns 0)
-0x00fdfe00 -> FUN_005c5c80   ZoneIn_handler_default_noop (repeated)
-0x00fdff00 -> FUN_00777da0
+ENTRY  ADDR          POINTER             FUNCTION
+-----  ----          -------             --------
+  0   0x00fdfb80 -> FUN_00759820
+  1   0x00fdfb84 -> FUN_007598a0
+  2   0x00fdfb88 -> FUN_00759920
+  3   0x00fdfb8c -> FUN_0075d710
+  4   0x00fdfb90 -> FUN_0075d750
+ 16   0x00fdfbc0 -> FUN_00759a60
+ 24   0x00fdfbe0 -> FUN_00759cd0   vtable_dispatch_slot23 handler
+ 28   0x00fdfbf0 -> FUN_00759de0   (empty/no-op)
+ 30   0x00fdfbf8 -> FUN_00759e00   (empty/no-op)
+ 31   0x00fdfbfc -> FUN_00759e10
+ 32   0x00fdfc00 -> FUN_00759e20
+ 33   0x00fdfc04 -> FUN_00759e30
+ 34   0x00fdfc08 -> FUN_00759e40
+ 35   0x00fdfc0c -> FUN_0076c0d0
+ 36   0x00fdfc10 -> FUN_0076c3b0
+ 37   0x00fdfc14 -> FUN_0076c220
+ 38   0x00fdfc18 -> dataPacket_calls_onReceiveDataPacket  (Lua bridge)
+ 39   0x00fdfc1c -> FUN_00759ed0
+ 40   0x00fdfc20 -> FUN_00759f50
+ 41   0x00fdfc24 -> FUN_0076c4d0
+ 42   0x00fdfc28 -> FUN_00759fd0
+ 43   0x00fdfc2c -> FUN_0075a060
+ 44   0x00fdfc30 -> FUN_0075a0e0
+ 45   0x00fdfc34 -> FUN_0075a160
+ 46   0x00fdfc38 -> FUN_0075a200
+ 47   0x00fdfc3c -> FUN_0075a280
+ 48   0x00fdfc40 -> FUN_0075a300
+ 56   0x00fdfc60 -> FUN_0075a630
+ 64   0x00fdfc80 -> FUN_0075a920
+ 72   0x00fdfca0 -> FUN_00776cf0
+ 96   0x00fdfd00 -> default_noop (returns 0)
+160   0x00fdfe00 -> default_noop (repeated)
+224   0x00fdff00 -> FUN_00777da0
 ```
 
-**Tabla range estimate**: from 0x00fdfb80 to 0x00fdff00+ =
-**~0x380 bytes = ~224 function pointers**.
+**Table range**: 0x00fdfb80 to 0x00fdff00+ = ~**224+ entries** with
+4-byte stride (each entry = 1 function pointer).
+
+So the "data packet" handler at entry 38 corresponds to whatever
+opcode the runtime maps to position 38 in this table. If the
+mapping is opcode-direct (table[opcode] = handler), this is opcode
+0x26 (= 38 decimal). If the mapping uses a base offset, it could
+be any other value.
+
+Without finding the dispatcher's opcode-to-position arithmetic
+(probably `table[opcode * 4 + base]`), the exact opcode mapping
+remains undetermined. But the table existence + the handler patterns
+are conclusive.
 
 ## Handler Categories (3 patterns observed)
 
