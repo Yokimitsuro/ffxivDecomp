@@ -1,12 +1,13 @@
 # Quick Reference: FFXIV 1.x Architecture Lookup Tables
 
-**Single-page reference for the most-used facts** from the 173+
-findings (66 EXE + 86 Lua + 13 correlation). Use this when you need a
+**Single-page reference for the most-used facts** from the 176+
+findings (69 EXE + 86 Lua + 13 correlation). Use this when you need a
 fast lookup; refer to the named finding files for full context.
 
-Last updated: 2026-05-28 (added: spawn pipeline 6-stage, Application
-main tick + per-frame dispatch, class system thunk family complete,
-DesktopWidget Lua connector, 15 RTTI types confirmed, 11th ResumeChecker).
+Last updated: 2026-05-28 LATE (added: SPAWN WIRE-SIDE CLOSED with
+opcode 0x17c + 7 Group:: subclasses + Zone MAIN inbound dispatcher
+50+ game opcodes; 17 RTTI types base + 7 Group:: subclasses; full
+producer-to-consumer-to-Lua flow for spawn).
 
 For historical narrative + pre-session findings, see
 `MASTER_INDEX_1.x_MODEL.md`.
@@ -121,7 +122,46 @@ Opcode  Size    Handler                                      Purpose
 0x135   24B     ZoneOut_send_opcode_0x135_24B_dword          Subscribe to bindingId
 ```
 
-### Inbound (Zone channel, table @ 0x00fdfb80, ~224 entries)
+### Inbound GAME PROTOCOL (Zone channel; main dispatcher @ 0x004dc690; ~50+ opcodes) -- NEW
+
+```text
+Wire opcode  Handler                                  Purpose
+-----------  -------                                  -------
+SESSION OPCODES (LOW; 0x02-0x11):
+  0x02       FUN_004d90c0+9980+dc5d0 chain            Session reauth
+  0x03       FUN_004d8560 + 2x std::string            Login text push
+  0x04       Complex disconnect cleanup chain         Logout
+  0x05/0d/10 vtable[+0x24] dispatch                   Generic forward
+  0x06       FUN_0081eb90                             ?
+  0x07       Resync loop                              Reconnect resync
+  0x08-0x0b  FUN_0081f090 bulk push (1/16/32/64)      Bulk state push
+  0x0c       FUN_004bbb30 (short+byte)                ?
+  0x0e/0x11  Disconnect notice variants
+  0xca/0xcb  Session marker / cleanup
+
+GAME PROTOCOL (HIGH; 0x143-0x1a8):
+  0x143      FUN_00576240
+  0x146      FUN_005764c0
+  0x148-0x156 FUN_00576560-b80 (15 distinct)          Various bridges
+  0x16d      FUN_005763c0 (byte payload)
+  0x17a      FUN_005763b0 (uint payload)
+  0x17c      SPAWN -- SpawnPipeline_FACTORY           ACTOR SPAWN PACKET ← !
+  0x17d-0x18b FUN_005762c0-3a0 (12 distinct)          Various bridges
+  0x18d      FUN_00575550 + FUN_0055cf70 (complex)    Session-bound dispatch
+  0x18f/0x190 FUN_00576c60/cd0                        ?
+  0x191      FUN_00576d40
+  0x193      FUN_00578c90 (3-arg)
+  0x196      FUN_00576050
+  0x198      FUN_00576150 (string)
+  0x1a3      FUN_00576140
+
+Default fallback: vtable[+0x24] on session at this+0x4e0
+
+The 0-59 sub-opcode table @ 0x00fdfb80 is a SEPARATE inbound
+dispatch mechanism for different sub-event types.
+```
+
+### Inbound SUB-OPCODE table (Zone channel, table @ 0x00fdfb80, ~224 entries)
 
 ```text
 Entry  Address      Handler                                     Mapped opcode
@@ -639,32 +679,86 @@ PARADIGM 3: timed dispatchers (engine polls Lua state periodically)
             WorkSync delta-broadcast at server tick
 ```
 
-## 13a. Spawn Pipeline (6 stages, typed-packet ring-buffer)
+## 13a. Spawn Pipeline FULL END-TO-END (CLOSED 2026-05-28)
 
 ```text
-Spawn architecture: NOT a simple wire opcode -- a TYPED PACKET
-OBJECT SYSTEM via Group::PacketRequestBase polymorphic hierarchy.
+SPAWN ARCHITECTURE: typed-packet replication via Group:: hierarchy.
+Wire opcode 0x17c carries Group::PacketRequestBase-derived packets.
 
-Stage  Function                                                   Address
------  --------                                                   -------
-T0     SpawnPipeline_T0_perTickPump_processQueue                  0x006cdd20
-T1     SpawnPipeline_T1_ringBufferConsumer_castEntryBuilderBase   0x006cda80
-T2     SpawnPipeline_T2_orchestrate_listObject_emits_0x130_pair   0x006cd8e0
-T3     SpawnPipeline_T3_dispatch2plusN_actorsList                 0x006db9a0
-T4     SpawnPipeline_T4_buildAndDispatchToAllocator               0x006cbc90
-T5     SpawnPipeline_T5_allocateActor_84B_invokeOnInit_           0x006c8cf0
-       ackVia_0x133
+FULL FLOW (server packet -> Lua actor:_onInit):
 
-Ring buffer at instance+0x20 (head +0x28, size +0x2c, cap +0x24)
-Up to 2 entries processed per per-frame call.
+  SERVER pushes opcode 0x17c (Zone channel, ~120 byte packet)
+   ↓
+  Zone_MAIN_inbound_opcode_dispatcher_50plus_handlers (0x004dc690)
+   ↓ case 0x17c:
+  ZoneIn_opcode_0x17c_SPAWN_extractAndForwardToFactory (0x00576250)
+   ↓
+  SpawnPipeline_dispatcher_check2711tag_routeToFactory (0x006cc620)
+   ↓ checks 0x2711 list-object signature
+  SpawnPipeline_FACTORY_dispatchByTypeTag_enqueueToRingBuffer (0x006cc070)
+   ↓ TYPE TAG at packet[+0x10] selects subclass:
+   │   0   -> EntryBuilder (spawn)
+   │   0xe -> OnlineStatusUpdater
+   │   ... -> other Group:: subclasses
+   ↓ ringBuffer_enqueue_4bytes(instance+0x20, &newPacket)
+   ↓
+  [PER-FRAME tick fires]
+   ↓
+  SpawnPipeline_perFrameWrapper_dispatchesT0 (slot[6] of PerFrameTick)
+   ↓
+  T0  SpawnPipeline_T0_perTickPump_processQueue           0x006cdd20
+  T1  SpawnPipeline_T1_ringBufferConsumer (RTTI cast)     0x006cda80
+  T2  SpawnPipeline_T2_orchestrate (sends 2x 0x130 ACKs)  0x006cd8e0
+  T3  SpawnPipeline_T3_dispatch2plusN_actorsList          0x006db9a0
+  T4  SpawnPipeline_T4_buildAndDispatchToAllocator        0x006cbc90
+  T5  SpawnPipeline_T5_allocateActor_84B + 0x133 ACK      0x006c8cf0
+   ↓
+  Actor_invokeLua_onInit
+   ↓
+  LUA: actor:_onInit() -- script callback fires; actor LIVE
 
-OUTBOUND ACK per spawn:
-  2x opcode 0x130 (listObjectQueueAdd + Delete = list-lifecycle ACK)
-  1x opcode 0x133 (T5 WorkSync init ACK)
+WIRE PACKET 0x17c LAYOUT (~120 bytes):
+  +0x00  id_a (8B)            actor primary id
+  +0x08  id_b (8B)            dedup key (server tracks)
+  +0x10  TYPE_TAG (4B)        0=EntryBuilder, 0xe=OnlineStatusUpdater, ...
+  +0x18  field_pair_1 (8B)    self-check
+  +0x20  field_pair_2 (8B)    self-check fallback
+  +0x28  matched_id (8B)      comparison key
+  +0x30  payload_data
+  +0x40  flag (4B)
+  +0x44  CLASS NAME STRING    null-terminated; used by _createActor
+  +0x76  size (short)
 
-Sizes:
+OUTBOUND ACKs per spawn (server tracks these):
+  2x opcode 0x130 (32B each): listObjectQueueAdd + Delete
+     payload: (resolver_id, primary_id) = same 2 IDs server sent
+  1x opcode 0x133 (56B): WorkSync init ACK
+     fires from T5 after actor:_onInit() completes
+
+SIZES:
   Actor instance:  84 bytes (0x54) via operator_new in T5
   WorkRecord:      72 bytes (0x48) in T4 if class has work fields
+  Wire packet:     ~120 bytes
+
+7 GROUP:: SUBCLASSES (typed-packet hierarchy):
+  PacketRequestBase (base; vftable @ 0x00fd4120, 13 slots)
+    EntryBuilderBase
+      EntryBuilder         spawn (alloc 0xf8 child)
+      BreakupBuilder       despawn
+      OnlineStatusUpdater  status change (alloc 0x50)
+    MemberInfoUpdater      member info update
+    PropertyUpdater        property update
+    WorkSyncUpdater        worksync state (alloc 0xa0 = 160B)
+
+THE 0x2711 MAGIC: list-object spawn signature checked at
+SpawnPipeline_dispatcher_check2711tag. Triggers notification chain
+setup before factory dispatch.
+
+SERVER-SIDE COMPLETE PROTOCOL:
+  1. Send opcode 0x17c with packet
+  2. Wait for 2x 0x130 ACK (list lifecycle)
+  3. Wait for 1x 0x133 ACK (WorkSync init complete)
+  4. Now push state updates via 0x12F/0x132/0x133
 ```
 
 ## 13b. Application Main Loop + Per-Frame Tick (CAPSTONE)
@@ -702,7 +796,7 @@ INPUT EVENT ENCODING (32-bit packed at this+0x17828):
   Tag 0xc0 routes to DAT_01336b60 + (subsys_id * 24) handler table.
 ```
 
-## 13c. RTTI Types Confirmed (15 total)
+## 13c. RTTI Types Confirmed (17 base + 7 Group:: subclasses = 24 total)
 
 ```text
 NAMESPACE: Component::Lua::GameEngine::
@@ -722,14 +816,28 @@ NAMESPACE: Application::Lua::Script::Client::Control::
   - DesktopWidget
   - WorldMaster
 
-NAMESPACE: Application::Lua::Script::Client::Group::   ← NEW NAMESPACE
-  - PacketRequestBase                                   (typed packet root)
-  - EntryBuilderBase                                    (actor spawn packet)
+NAMESPACE: Component::Network::IpcChannel::             (NEW; networking)
+  - ConnectionManagerTmpl<ZoneProtoUp, ZoneProtoDown>
+
+NAMESPACE: Application::Network::ZoneProtoChannel::    (NEW; networking)
+  - ServiceConsumerConnectionManager
+
+NAMESPACE: Application::Lua::Script::Client::Group::   (typed packets)
+  - PacketRequestBase           (base; vftable @ 0x00fd4120)
+  - EntryBuilderBase            (subclass for entry ops)
+  - EntryBuilder                (concrete: actor spawn)
+  - BreakupBuilder              (concrete: actor despawn)
+  - OnlineStatusUpdater         (concrete: online status)
+  - MemberInfoUpdater           (concrete: member info)
+  - PropertyUpdater             (concrete: property change)
+  - WorkSyncUpdater             (concrete: worksync state, 160B child)
 
 Used by:
-  - _isInstanceOf (6 RTTI types in hardcoded fast-path; ActorBase
+  - _isInstanceOf (6 Control:: types in hardcoded fast-path; ActorBase
     short-circuited to TRUE because universal)
-  - SpawnPipeline T1 (Group:: packet hierarchy)
+  - SpawnPipeline T1 (Group:: packet hierarchy RTTI cast to EntryBuilderBase)
+  - SpawnPipeline_FACTORY (TYPE TAG -> Group:: subclass dispatch)
+  - ZoneClient_pumpConnectionState (Network types)
   - Various other ___RTDynamicCast call sites
 ```
 
@@ -762,6 +870,8 @@ GENERAL PARAMETER (player stats):
 
 ### EXE Architecture (2026-05-28 SESSION -- newest)
 
+- `finding_spawn_wire_side_CLOSED_opcode_0x17c_zone_main_inbound_dispatcher.md` -- CAPSTONE: spawn wire-side CLOSED + opcode 0x17c + Zone MAIN dispatcher 50+ opcodes + 7 Group:: subclasses
+- `finding_zoneclient_inbound_dispatch_layer_partial_threshold_0x1c11.md` -- 0x1c11 sequence threshold + Network RTTI
 - `finding_application_mainTick_and_per_frame_subsystem_dispatch.md` -- CAPSTONE: main loop + per-frame tick
 - `finding_spawn_pipeline_typed_packet_ring_buffer_6_stage_architecture.md` -- SPAWN 6-stage; Group:: namespace
 - `finding_isInstanceOf_thunk_dual_dispatch_rtti_plus_luachain.md` -- 7 RTTI + Lua chain walk
@@ -928,11 +1038,11 @@ CommandUpdate record           0x118 B   (280 bytes)
 BehaviorLogger listener        0x48 B    (72 bytes; separate from CommandUpdate)
 ```
 
-## 19. Coverage Summary (As of 2026-05-28)
+## 19. Coverage Summary (As of 2026-05-28 LATE)
 
 ```text
-FINDINGS:                173+ total
-  EXE-side:               75+
+FINDINGS:                176+ total
+  EXE-side:               78+
   Lua-side:               86
   Correlation:            13
 
@@ -945,6 +1055,14 @@ THUNKS DISASSEMBLED:      17+ (master primitives + 8 _wait* + class system)
   - 4 architectural (createActor, defineClass, wait, getData)
   - 1 async I/O (loadKeyTemporarily)
   - 2 class system NEW (_isInstanceOf dual dispatch, _canCreateActorByName)
+
+WIRE OPCODES (massively expanded):
+  Outbound (Zone): 9 named (0x12d-0x135) + chat opcodes
+  Inbound MAIN game protocol: 50+ opcodes (0x143-0x1a8 range)
+    + KEY: opcode 0x17c = SPAWN PACKET (Group::PacketRequestBase)
+  Inbound session opcodes: ~14 (0x02-0x11)
+  Inbound sub-opcode table: 60 entries @ 0x00fdfb80
+  Total inbound: ~120+ opcodes pinned
   - 4 _updateWork (CharaBase, Director, Item, GroupBase)
   - 2 chat (parseTextCommand, appendMessagePool)
   - 6 _wait* siblings (Turning, CharaSchedFin x2, Tutorial x3)
@@ -953,10 +1071,14 @@ RESUMECHECKER SUBCLASSES: 11 confirmed (was 10)
   Sizes: 3 of 8B, 4 of 12B, 1 each of 16B/40B/120B/148B
   Latest add: LpbLoader::ResumeChecker (engine-internal, ~120B)
 
-RTTI TYPES CONFIRMED: 15 total
+RTTI TYPES CONFIRMED: 24 total (17 base + 7 Group:: subclasses)
   4 in Component::Lua::GameEngine::
   9 in Application::Lua::Script::Client::Control::
-  2 in Application::Lua::Script::Client::Group::  (NEW namespace)
+  2 in Component::Network::IpcChannel:: / Application::Network::*
+  8 in Application::Lua::Script::Client::Group::
+    (PacketRequestBase + EntryBuilderBase + EntryBuilder +
+     BreakupBuilder + OnlineStatusUpdater + MemberInfoUpdater +
+     PropertyUpdater + WorkSyncUpdater)
 
 WIRE OPCODES PINNED:
   Outbound: 7 named (0x12d-0x135) + chat opcodes
@@ -979,10 +1101,13 @@ DATA CATALOG:            803 CSV tables
   Class registration loop          ✓ MAPPED 100% (4-thunk family complete)
   Actor lifecycle T0-T3            ✓ MAPPED 100%
   ResumeChecker hierarchy          ✓ MAPPED 11 confirmed (was 10)
-  SPAWN pipeline drain side        ✓ MAPPED 100% (6-stage T0-T5)  NEW
-  SPAWN pipeline wire/producer     ⊘ NOT YET MAPPED (async network path)
-  Main loop architecture           ✓ MAPPED 100% (2-level tick)    NEW
-  DesktopWidget UI orchestrator    ✓ MAPPED (13 subsystems, 255 m) NEW
+  SPAWN PIPELINE end-to-end        ✓ MAPPED 100% PROD->CONS->LUA  CLOSED
+    - producer side: opcode 0x17c -> dispatcher -> factory
+    - consumer side: 6-stage T0-T5 + ACKs (0x130 x2 + 0x133)
+  Main loop architecture           ✓ MAPPED 100% (2-level tick)
+  DesktopWidget UI orchestrator    ✓ MAPPED (13 subsystems, 255 m)
+  Zone game-protocol opcodes       ✓ MAPPED 50+ opcodes (0x143-0x1a8) NEW
+  Network connection layer         ⚙ PARTIAL (RTTI types pinned; thread TBD)
 ```
 
 ## 20. What's Left
@@ -1021,6 +1146,11 @@ RESOLVED IN 2026-05-28 SESSION:
   ✓ Application main tick + per-frame dispatch -- DONE; CAPSTONE
   ✓ 11th ResumeChecker (LpbLoader::ResumeChecker) -- DONE
   ✓ Subsystem[10] (timeout monitor 900-frame threshold) -- DONE
+  ✓ SPAWN WIRE OPCODE PINNED: 0x17c -- DONE; via Ghidra RTTI walk
+  ✓ 7 Group:: subclasses (EntryBuilder/BreakupBuilder/Online/Member/
+    Property/WorkSyncUpdater) -- DONE
+  ✓ Zone MAIN inbound opcode dispatcher 50+ game opcodes -- DONE
+  ✓ Full spawn protocol producer->consumer->Lua -- DONE; CAPSTONE
 ```
 
 ## 21. Key Confirmed Facts (independent EXE validations)
@@ -1054,6 +1184,14 @@ RESOLVED IN 2026-05-28 SESSION:
 - Spawn pipeline occupies subsystem slot[6] of PerFrameTick
 - Subsystem slot[10] = timeout monitor (900-frame / 15-sec threshold)
 - 32-bit packed input events at engine+0x17828 (3-bit tag + 4-bit subsys + 24-bit payload)
+- WIRE OPCODE 0x17c = SPAWN PACKET (Group::PacketRequestBase typed packets)
+- Zone MAIN inbound dispatcher at FUN_004dc690 (50+ game opcodes 0x143-0x1a8)
+- 7 Group:: subclasses for typed-packet replication (spawn/despawn/status/member/property/worksync)
+- 0x2711 = list-object spawn signature (PacketRequestBase discriminator)
+- PacketRequestBase vftable @ 0x00fd4120 (13 slots; subclasses override [5]/[11] = inbound handlers)
+- Spawn ACK pattern: 2x outbound 0x130 (queueAdd + delete) + 1x outbound 0x133 (init complete)
+- Wire packet 0x17c is ~120 bytes including class name string at +0x44
+- 0x1c11 sequence threshold (FUN_004e5ff0) routes between in-order tree vs discard
 ```
 
 ## 22. Speculative / Open Threads

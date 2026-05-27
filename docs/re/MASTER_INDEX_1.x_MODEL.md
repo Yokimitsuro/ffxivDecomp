@@ -2,15 +2,106 @@
 
 This document is the **executive summary** of the reverse-engineering
 work completed during the multi-session research effort. The 1.x
-client model is decomposed across **173+ findings** (75 EXE + 86 Lua
+client model is decomposed across **176+ findings** (78 EXE + 86 Lua
 + 13 correlation) covering: wire protocol, schemas, native binding
 APIs, gameplay subsystems, data correlations.
 
-Last updated: 2026-05-28 (session +5 commits: class system + spawn pipeline + main loop CAPSTONE).
+Last updated: 2026-05-28 LATE (session +9 commits including SPAWN WIRE-SIDE CLOSED via interactive Ghidra RTTI walk).
 
 **For fast lookups**, see `docs/re/QUICK_REFERENCE.md` (22 sections,
 lookup tables for all architectural facts). This index has the
 narrative; QUICK_REFERENCE has the tables.
+
+## Session 2026-05-28 LATE -- SPAWN WIRE-SIDE CLOSED (+4 commits)
+
+```text
+USER PERFORMED GHIDRA INTERACTIVE NAVIGATION to walk the MSVC RTTI
+chain (TypeDescriptor -> COL -> vftable -> constructors). MCP could
+not search by RTTI symbol references; user closed that gap manually
+in ~5 min, then MCP traced the rest.
+
+✓ SPAWN WIRE-SIDE LOOP COMPLETELY CLOSED
+  Wire opcode 0x17c (380 decimal) = SPAWN PACKET
+  Sent by server on Zone channel
+  Carries Group::PacketRequestBase-derived typed packet
+
+  Full producer flow:
+    WIRE 0x17c
+     -> Zone_MAIN_inbound_opcode_dispatcher (FUN_004dc690)
+     -> ZoneIn_opcode_0x17c_SPAWN_extractAndForwardToFactory
+        (FUN_00576250)
+     -> SpawnPipeline_dispatcher_check2711tag_routeToFactory
+        (FUN_006cc620)
+     -> SpawnPipeline_FACTORY_dispatchByTypeTag_enqueueToRingBuffer
+        (FUN_006cc070)
+     -> ringBuffer push to spawn pipeline instance+0x20
+     -> per-frame T0-T5 drain
+     -> Actor_invokeLua_onInit
+     -> LUA: actor:_onInit()
+
+✓ 7 GROUP:: SUBCLASSES DISCOVERED (typed-packet replication system):
+  PacketRequestBase (base; vftable @ 0x00fd4120, 13 slots)
+    EntryBuilderBase
+      EntryBuilder         actor ADD/SPAWN (0xf8 child)
+      BreakupBuilder       actor REMOVE/DESPAWN
+      OnlineStatusUpdater  ONLINE STATUS change
+    MemberInfoUpdater      MEMBER INFO update
+    PropertyUpdater        PROPERTY update
+    WorkSyncUpdater        WORKSYNC STATE replication (0xa0 = 160B)
+
+  This is NOT just about spawn -- it's a complete TYPED OBJECT
+  REPLICATION subsystem covering 6+ operation types.
+
+✓ ZONE MAIN INBOUND OPCODE DISPATCHER (NEW; 50+ game opcodes):
+  FUN_004dc690 -- switch on packet[+2] (16-bit wire opcode)
+  - Session opcodes 0x02-0x11 (~14 cases incl. handshake/logout/resync)
+  - Game protocol 0x143-0x1a8 (~40 specific handlers)
+  - 0x17c = SPAWN
+  - Default fallback: vtable[+0x24] on session at this+0x4e0
+
+✓ WIRE PACKET FORMAT 0x17c FULLY DOCUMENTED (~120 bytes):
+  +0x00  id_a (8B)            actor primary id
+  +0x08  id_b (8B)            dedup key
+  +0x10  TYPE_TAG             0=EntryBuilder, 0xe=OnlineStatusUpdater, ...
+  +0x18  field pair 1 (8B)    self-check
+  +0x20  field pair 2 (8B)    self-check fallback
+  +0x28  matched_id (8B)
+  +0x30  payload_data
+  +0x40  flag
+  +0x44  CLASS NAME STRING    null-terminated; used for _createActor
+  +0x76  size (short)
+
+✓ 0x2711 MAGIC TAG NOW UNDERSTOOD:
+  List-object spawn signature checked at
+  SpawnPipeline_dispatcher_check2711tag. Triggers notification
+  chain setup before factory dispatch.
+
+✓ SERVER-SIDE SPAWN PROTOCOL COMPLETELY SPECIFIED:
+  1. Send opcode 0x17c with wire packet
+  2. Wait for 2x outbound 0x130 ACK (listObjectQueueAdd + Delete)
+  3. Wait for 1x outbound 0x133 ACK (WorkSync init complete)
+  4. Now push state updates via 0x12F/0x132/0x133
+
+RTTI TYPES NOW 24 TOTAL (was 15):
+  + 2 in Network namespace (ConnectionManagerTmpl + ServiceConsumerConnectionManager)
+  + 7 in Group:: namespace (PacketRequestBase + 6 subclasses)
+  + 9 in Control:: namespace (previously documented)
+  + 4 in GameEngine:: namespace (previously documented)
+  + 2 in Group:: from prior spawn finding
+
+WIRE OPCODE COUNT now ~120+ inbound + ~9 outbound game:
+  - 50+ game protocol opcodes in 0x143-0x1a8 range (THIS FINDING)
+  - 14 session opcodes 0x02-0x11
+  - 60 entries in 0x00fdfb80 sub-opcode table (prior session)
+  - 9 outbound Zone opcodes 0x12d-0x135
+
+PARTIAL: 0x1c11 sequence threshold (FUN_004e5ff0) -- sliding window
+boundary for in-order packet processing.
+
+REMAINING OPEN: network thread/fiber that produces the typed packet
+objects (separate from main thread). Not critical for server impl
+since wire format is now known.
+```
 
 ## Session 2026-05-28 Expansion (5 commits) -- CAPSTONE ROUND
 
@@ -233,12 +324,21 @@ Disassembled C++ thunks:         17+ (master primitives + 8 _wait* siblings
                                       _isInstanceOf, _canCreateActorByName)
 ResumeChecker subclasses:        11 confirmed (was 10; +LpbLoader::ResumeChecker
                                       engine-internal, ~120B)
-RTTI types confirmed:            15 (was 9; +PacketRequestBase + EntryBuilderBase
-                                      in NEW Group:: namespace)
-Spawn pipeline:                  6-stage drain side mapped (T0-T5);
-                                      wire/producer side NOT YET mapped
+RTTI types confirmed:            24 total (17 base + 7 Group:: subclasses);
+                                      4 GameEngine:: + 9 Control:: +
+                                      2 Network:: + 8 Group::
+Spawn pipeline:                  END-TO-END MAPPED (CLOSED 2026-05-28):
+                                      producer (opcode 0x17c -> factory)
+                                      consumer (6-stage T0-T5 + ACKs)
+                                      Lua hook (actor:_onInit)
 Main loop architecture:          MAPPED (2-level: Application_mainTick
                                       -> PerFrameTick -> 15+ subsystems)
+Wire opcodes:                    ~120+ inbound pinned (was ~70)
+                                  - 50+ game protocol in 0x143-0x1a8
+                                  - 14 session opcodes 0x02-0x11
+                                  - 60-entry sub-opcode table @ 0x00fdfb80
+                                  - 9 outbound Zone opcodes (0x12d-0x135)
+                                  - Wire opcode 0x17c = SPAWN PACKET (KEY)
 Documented wire opcodes:         9 outbound (0x12d-0x135) +
                                   ~224 inbound dispatch table
 Documented binding ids:          25+ catalogued (1xxx-5xxx, 100xxx-500xxx)
