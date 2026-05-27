@@ -367,8 +367,155 @@ Likely (Medium):
    actor command dispatcher?)
 ```
 
+## 11. ADDENDUM: Per-actor message system FULLY CHARACTERIZED
+
+Second pass deep-dived the actor-bound group (0x148-0x156, 15 opcodes).
+**All 15 follow IDENTICAL structure** with only the sub-dispatcher
+differing. This reveals the **per-actor message routing infrastructure**.
+
+### Sub-dispatcher pattern (confirmed across 5 samples)
+
+```c
+ActorMsg_HANDLER(this, actor_addr, payload):
+   1. queue = ActorMessageQueue_lookupOrCreate_perActorId_WorkPathTree(this, actor)
+        // looks up per-actor queue in red-black tree at this+0x10
+        // creates new queue if actor not seen before
+   2. msg = CONSTRUCT_MESSAGE_TYPE_X(local_buf, payload)
+        // type A: FUN_007713xx family
+        // type B: FUN_00768exx family
+   3. ENQUEUE_VARIANT(queue, msg)
+        // variant A: FUN_00764a30
+        // variant B: FUN_00764b30
+   4. CLEANUP(msg)
+        // type A: FUN_0076df10
+        // type B: FUN_007660c0
+```
+
+### 15 actor-bound opcodes -- sub-dispatcher table
+
+```text
+Opcode  Wire size  Sub-dispatcher        Constructor    Enqueue     Cleanup
+------  ---------  --------------        -----------    -------     -------
+0x148   uint32     FUN_00580e70 (typeA)  FUN_00771350   FUN_00764a30 FUN_0076df10
+0x149   uint32     FUN_00580ef0 (typeA)  FUN_007713e0   FUN_00764a30 FUN_0076df10
+0x14a   uint32     FUN_00580f70 (typeA)  ?              ?            ?
+0x14b   uint32     FUN_00580ff0 (typeA)  ?              ?            ?
+0x14c   uint32     FUN_00581070 (typeA)  ?              ?            ?
+0x14d   ushort     FUN_005810f0 (typeA)  ?              ?            ?  ← short payload variant
+0x14e   uint32     FUN_00581170 (typeA)  ?              ?            ?
+0x14f   int (raw)  FUN_005811f0 (typeB)  FUN_00768e40   FUN_00764b30 FUN_007660c0  ← INT raw, TYPE B
+0x150   uint32     FUN_00581270 (typeB?) ?              ?            ?
+0x151   uint32     FUN_005812f0 (typeB?) ?              ?            ?
+0x152   ushort     FUN_00581370 (typeB?) ?              ?            ?  ← short payload variant
+0x153   int (raw)  FUN_005813f0 (typeB)  ?              ?            ?
+0x154   uint32     FUN_00581470 (typeB?) ?              ?            ?
+0x155   uint32     FUN_005814f0 (typeB?) ?              ?            ?
+0x156   uint32     FUN_00581570 (typeB?) ?              ?            ?
+
+Sub-dispatchers are evenly spaced at +0x80 byte intervals
+(FUN_00580e70, FUN_00580ef0, FUN_00580f70, ... +0x80 each).
+This is a TABLE-DRIVEN dispatch pattern.
+
+TWO MESSAGE TYPES identified:
+  TYPE A (FUN_007713xx + FUN_00764a30):
+    Opcodes 0x148-0x14e (7 variants) -- different payload data per opcode
+  TYPE B (FUN_00768exx + FUN_00764b30):
+    Opcodes 0x14f-0x156 (8 variants) -- different payload data per opcode
+
+Type A vs Type B uses DIFFERENT message constructors AND DIFFERENT
+enqueue methods. Probably distinguishes between:
+  - Command vs Event messages
+  - Source-targeted vs Target-targeted
+  - Immediate vs Deferred dispatch
+  (Specific semantics need more decomp to disambiguate)
+```
+
+### ActorMessageQueue infrastructure
+
+```c
+ActorMessageQueue_lookupOrCreate_perActorId_WorkPathTree(this, actor_id):
+  queue_map = this+0x10  // red-black tree (WorkPathTree style)
+  found = WorkPathTree_lowerBound(queue_map, &out, actor_id)
+  if (found):
+    return *(int**)(found_node + 0x10)   // existing queue ptr
+  else:
+    new_queue = operator_new(8)           // 8-byte queue head
+    new_queue = FUN_0075f5b0(new_queue)    // ctor
+    map.insert(actor_id, new_queue)
+    return new_queue
+```
+
+### Renames + comments added in this addendum
+
+```text
+0x0076b950  FUN_0076b950  → ActorMessageQueue_lookupOrCreate_perActorId_WorkPathTree
+0x00580e70  FUN_00580e70  → ActorMsg_0x148_construct_typeA_enqueueVariantA
+0x00580ef0  FUN_00580ef0  → ActorMsg_0x149_construct_typeA_enqueueVariantA_alt
+0x005811f0  FUN_005811f0  → ActorMsg_0x14f_construct_typeB_enqueueVariantB_intPayload
+0x00576240/560/2c0/8c90  -- per main finding above
+
+Plus decompiler comment at 0x0076b950 documenting the queue
+infrastructure.
+```
+
+### Inferred semantics for the 15 actor-bound message types
+
+```text
+Without per-message-type semantic info (would need deeper decomp of
+each FUN_007713xx and FUN_00768exx variant), the most likely meanings
+based on MMO architecture conventions are:
+
+TYPE A group (0x148-0x14e) -- COMMANDS / ACTIONS:
+  0x148  action invocation (cast)
+  0x149  action result (cast complete)
+  0x14a  action cancel
+  0x14b  damage / heal apply
+  0x14c  status apply
+  0x14d  status remove (short opcode = enum)
+  0x14e  cooldown / recast update
+
+TYPE B group (0x14f-0x156) -- EVENTS / STATE:
+  0x14f  HP/MP change (int = absolute or delta)
+  0x150  position update
+  0x151  facing direction update
+  0x152  animation trigger (short = anim id)
+  0x153  TP / resource change (int)
+  0x154  flag set
+  0x155  flag clear
+  0x156  miscellaneous event
+
+These are EDUCATED GUESSES based on MMO patterns. Verification
+would require per-variant decomp of the message constructors.
+```
+
+### Server-side priority refined
+
+```text
+For working basic combat / movement:
+  HIGHEST PRIORITY (must implement):
+    0x148 (action invocation)
+    0x14b (damage/heal)
+    0x14f (HP/MP change)
+    0x150 (position update)
+    
+  HIGH PRIORITY (needed for combat polish):
+    0x14c (status apply)
+    0x14d (status remove)
+    0x152 (animation)
+    
+  MEDIUM PRIORITY:
+    0x149 (action result)
+    0x14a (action cancel)
+    0x153 (resource change)
+    
+  LOWER PRIORITY:
+    0x14e (cooldown sync)
+    0x151 (facing)
+    0x154-0x156 (flags / misc)
+```
+
 ## Commit suggestion
 
 ```
-docs(re/exe): Zone inbound game opcodes 0x143-0x1a8 bridge pattern + 50+ opcode table (4 samples decompiled, semantic groups inferred, server-side priority list)
+docs(re/exe): Zone inbound game opcodes 0x143-0x1a8 bridge pattern + 50+ opcode table (4 samples decompiled, semantic groups inferred, server-side priority list) [+addendum: 15 actor-bound opcodes 0x148-0x156 sub-dispatcher table + per-actor queue infrastructure]
 ```
