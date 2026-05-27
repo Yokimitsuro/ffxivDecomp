@@ -2,15 +2,76 @@
 
 This document is the **executive summary** of the reverse-engineering
 work completed during the multi-session research effort. The 1.x
-client model is decomposed across **176+ findings** (78 EXE + 86 Lua
+client model is decomposed across **180+ findings** (82 EXE + 86 Lua
 + 13 correlation) covering: wire protocol, schemas, native binding
 APIs, gameplay subsystems, data correlations.
 
-Last updated: 2026-05-28 LATE (session +9 commits including SPAWN WIRE-SIDE CLOSED via interactive Ghidra RTTI walk).
+Last updated: 2026-05-28 LATE-2 (session +15 commits; complete actor lifecycle wire protocol; 6 Group:: subclasses wire-mapped; ~30 opcodes semantically pinned).
 
 **For fast lookups**, see `docs/re/QUICK_REFERENCE.md` (22 sections,
 lookup tables for all architectural facts). This index has the
 narrative; QUICK_REFERENCE has the tables.
+
+## Session 2026-05-28 LATE-2 -- ACTOR LIFECYCLE PROTOCOL COMPLETE (+5 commits)
+
+```text
+Continuation after SPAWN wire-side closure. Expanded into:
+  - 50+ game opcodes systematically catalogued (bridge pattern)
+  - 15 per-actor message types (0x148-0x156) characterized
+  - Despawn opcode found (0x143 corrects prior misidentification)
+  - Batch state push opcode (0x18d) -- multi-record up to 255x40B
+  - System error opcode (0x193) -- 22 codes internals
+  - Remaining 4 Group:: subclasses wire-mapped (0x187/0x18b + vtable)
+
+NEW OPCODES PINNED IN THIS ROUND:
+  0x143  DESPAWN PACKET                  BreakupBuilder factory
+  0x148-0x156 (15)  Per-actor messages    TYPE A (cmds) + TYPE B (events)
+  0x187  WorkSyncUpdater                  state batch (160B child)
+  0x18b  MemberInfoUpdater                party/linkshell member info
+  0x18d  Multi-record batch              up to 255 x 40B records
+  0x193  System error/status              22 codes (16 slot + 6 specific)
+
+COMPLETE ACTOR LIFECYCLE PROTOCOL FOR SERVER:
+  SPAWN:        0x17c (TYPE_TAG 0=spawn, 0xe=online status change)
+  DESPAWN:      0x143
+  STATE BATCH:  0x187, 0x18b, 0x18d
+  PER-ACTOR:    0x148-0x156 (15 message types)
+  STATE SYNC:   0x12F/0x132/0x133 (per-field worksync)
+  ERROR:        0x193 (22 codes)
+  SESSION:      0x02-0x11, 0xca/0xcb
+  ACKs (out):   0x130 (x2 per spawn), 0x133 (init)
+
+6 GROUP:: SUBCLASSES FULLY WIRE-MAPPED:
+  EntryBuilder       -> 0x17c (TYPE TAG 0)
+  BreakupBuilder     -> 0x143
+  OnlineStatusUpdater-> 0x17c (TYPE TAG 0xe)
+  MemberInfoUpdater  -> 0x18b
+  PropertyUpdater    -> vtable callback (polymorphic, internal)
+  WorkSyncUpdater    -> 0x187
+
+PER-ACTOR MESSAGE INFRASTRUCTURE (15 opcodes):
+  All route via ActorMessageQueue_lookupOrCreate_perActorId_WorkPathTree
+    (red-black tree at this+0x10, per-actor queues)
+  Sub-dispatchers at +0x80 byte stride (table-driven dispatch)
+  TYPE A pattern: FUN_007713xx ctor + FUN_00764a30 enqueue (commands)
+  TYPE B pattern: FUN_00768exx ctor + FUN_00764b30 enqueue (events)
+
+OPCODE 0x18d MULTI-RECORD BATCH:
+  Wire format: header (12B) + records (up to 255 x 40B) + count byte
+  Per-record: 6 of 10 dwords used, copied to 30B-stride slots
+  Gating: session-ready check; buffer if not ready
+  Likely use: PARTY MEMBER LIST or LINKSHELL MEMBER LIST batch updates
+
+OPCODE 0x193 SYSTEM ERROR:
+  16 slot setters (codes 0-0xF) for categorized error responses
+  4 specific error setters (0x10-0x12, 0x16)
+  Code 0x13: localized string builder (Japanese UTF-16 templates)
+  Code 0x14: cancel hook broadcast
+  Code 0x15: cancel hook cleanup
+
+Total session: 15 commits, ~30 opcodes semantically named, complete
+wire protocol for actor management + state replication documented.
+```
 
 ## Session 2026-05-28 LATE -- SPAWN WIRE-SIDE CLOSED (+4 commits)
 

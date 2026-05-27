@@ -1,13 +1,13 @@
 # Quick Reference: FFXIV 1.x Architecture Lookup Tables
 
-**Single-page reference for the most-used facts** from the 176+
-findings (69 EXE + 86 Lua + 13 correlation). Use this when you need a
+**Single-page reference for the most-used facts** from the 180+
+findings (73 EXE + 86 Lua + 13 correlation). Use this when you need a
 fast lookup; refer to the named finding files for full context.
 
-Last updated: 2026-05-28 LATE (added: SPAWN WIRE-SIDE CLOSED with
-opcode 0x17c + 7 Group:: subclasses + Zone MAIN inbound dispatcher
-50+ game opcodes; 17 RTTI types base + 7 Group:: subclasses; full
-producer-to-consumer-to-Lua flow for spawn).
+Last updated: 2026-05-28 LATE-2 (added: complete actor lifecycle wire
+protocol incl. 0x143 DESPAWN, 0x187 WorkSyncUpdater, 0x18b MemberInfoUpdater,
+0x18d batch state push, 0x193 error/22 codes; per-actor message system
+0x148-0x156 fully characterized; all 6 Group:: subclasses wire-mapped).
 
 For historical narrative + pre-session findings, see
 `MASTER_INDEX_1.x_MODEL.md`.
@@ -122,6 +122,41 @@ Opcode  Size    Handler                                      Purpose
 0x135   24B     ZoneOut_send_opcode_0x135_24B_dword          Subscribe to bindingId
 ```
 
+### Inbound ACTOR LIFECYCLE WIRE PROTOCOL (complete) -- NEW
+
+```text
+SPAWN:    0x17c TYPE_TAG 0     EntryBuilder         ~120B with class name
+                  TYPE_TAG 0xe OnlineStatusUpdater  (same opcode, different tag)
+DESPAWN:  0x143                 BreakupBuilder       ~32B (id only)
+STATE:    0x12F (56B)           WorkSync update
+          0x132 (24B)           Item state notify
+          0x133 (56B)           WorkSync alt / spawn init ACK
+          0x187                 WorkSyncUpdater BATCH (160B child struct)
+          0x18b                 MemberInfoUpdater (member info change)
+          0x18d                 Multi-record batch (up to 255 x 40B)
+          0x148-0x156 (15)      Per-actor message variants (TYPE A + TYPE B)
+ERROR:    0x193 (22 codes)      System error/status (16 slot + 6 specific)
+
+PER-ACTOR MESSAGE SYSTEM (opcodes 0x148-0x156):
+  Routing: ALL 15 -> ActorMessageQueue_lookupOrCreate_perActorId_WorkPathTree
+                       (red-black tree at this+0x10, queue per actor)
+  TYPE A (0x148-0x14e): COMMANDS/ACTIONS
+    constructor: FUN_007713xx family
+    enqueue:     FUN_00764a30
+    cleanup:     FUN_0076df10
+  TYPE B (0x14f-0x156): EVENTS/STATE
+    constructor: FUN_00768exx family
+    enqueue:     FUN_00764b30
+    cleanup:     FUN_007660c0
+
+OPCODE 0x193 SYSTEM ERROR (22 codes):
+  0x00-0x0F: 16 slot setters (error categories)
+  0x10-0x12, 0x16: 4 specific error type setters
+  0x13: BUILD LOCALIZED ERROR STRING (Japanese UTF-16 templates)
+  0x14: System_broadcastSubsystem_preCancelHooks
+  0x15: cancel hook cleanup
+```
+
 ### Inbound GAME PROTOCOL (Zone channel; main dispatcher @ 0x004dc690; ~50+ opcodes) -- NEW
 
 ```text
@@ -140,14 +175,17 @@ SESSION OPCODES (LOW; 0x02-0x11):
   0xca/0xcb  Session marker / cleanup
 
 GAME PROTOCOL (HIGH; 0x143-0x1a8):
-  0x143      FUN_00576240
+  0x143      DESPAWN -- BreakupBuilder construction   ACTOR DESPAWN PACKET ← !
   0x146      FUN_005764c0
   0x148-0x156 FUN_00576560-b80 (15 distinct)          Various bridges
   0x16d      FUN_005763c0 (byte payload)
   0x17a      FUN_005763b0 (uint payload)
   0x17c      SPAWN -- SpawnPipeline_FACTORY           ACTOR SPAWN PACKET ← !
-  0x17d-0x18b FUN_005762c0-3a0 (12 distinct)          Various bridges
-  0x18d      FUN_00575550 + FUN_0055cf70 (complex)    Session-bound dispatch
+  0x17d-0x186 FUN_005762c0-380 (10 distinct)          Various bridges
+  0x187      WORKSYNC -- WorkSyncUpdater_FACTORY      STATE BATCH ← !
+  0x188-0x18a FUN_00576360-380                        Various bridges
+  0x18b      MEMBERINFO -- MemberInfoUpdater_FACTORY  MEMBER INFO UPDATE ← !
+  0x18d      0x18d batch -- MULTI-RECORD BATCH        BATCH STATE PUSH ← !
   0x18f/0x190 FUN_00576c60/cd0                        ?
   0x191      FUN_00576d40
   0x193      FUN_00578c90 (3-arg)
@@ -870,6 +908,10 @@ GENERAL PARAMETER (player stats):
 
 ### EXE Architecture (2026-05-28 SESSION -- newest)
 
+- `finding_group_typed_packets_remaining_opcodes_0x187_0x18b.md` -- Group:: typed-packets wire COMPLETE: 0x187 + 0x18b + PropertyUpdater
+- `finding_opcode_0x143_DESPAWN_packet_breakupBuilder_path.md` -- Opcode 0x143 = DESPAWN (BreakupBuilder)
+- `finding_opcode_0x18d_session_batch_multi_record_state_push.md` -- 0x18d batch + 0x193 internals (22 codes)
+- `finding_zone_inbound_game_opcodes_0x143_0x1a8_bridge_pattern.md` -- 50+ game opcodes + per-actor msg system (15 opcodes)
 - `finding_spawn_wire_side_CLOSED_opcode_0x17c_zone_main_inbound_dispatcher.md` -- CAPSTONE: spawn wire-side CLOSED + opcode 0x17c + Zone MAIN dispatcher 50+ opcodes + 7 Group:: subclasses
 - `finding_zoneclient_inbound_dispatch_layer_partial_threshold_0x1c11.md` -- 0x1c11 sequence threshold + Network RTTI
 - `finding_application_mainTick_and_per_frame_subsystem_dispatch.md` -- CAPSTONE: main loop + per-frame tick
@@ -1060,9 +1102,15 @@ WIRE OPCODES (massively expanded):
   Outbound (Zone): 9 named (0x12d-0x135) + chat opcodes
   Inbound MAIN game protocol: 50+ opcodes (0x143-0x1a8 range)
     + KEY: opcode 0x17c = SPAWN PACKET (Group::PacketRequestBase)
+    + KEY: opcode 0x143 = DESPAWN PACKET (BreakupBuilder)
+    + KEY: opcode 0x187 = WORKSYNC BATCH (WorkSyncUpdater)
+    + KEY: opcode 0x18b = MEMBER INFO UPDATE (MemberInfoUpdater)
+    + KEY: opcode 0x18d = MULTI-RECORD BATCH (255 x 40B records)
+    + KEY: opcode 0x193 = SYSTEM ERROR/STATUS (22 codes)
+    + 15 opcodes 0x148-0x156 = per-actor message system
   Inbound session opcodes: ~14 (0x02-0x11)
   Inbound sub-opcode table: 60 entries @ 0x00fdfb80
-  Total inbound: ~120+ opcodes pinned
+  Total inbound: ~120+ opcodes pinned with ~6 SEMANTICALLY NAMED
   - 4 _updateWork (CharaBase, Director, Item, GroupBase)
   - 2 chat (parseTextCommand, appendMessagePool)
   - 6 _wait* siblings (Turning, CharaSchedFin x2, Tutorial x3)
