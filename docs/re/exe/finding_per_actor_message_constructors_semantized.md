@@ -242,8 +242,137 @@ Speculative:
    to cast X"); should be in the outbound Zone opcodes
 ```
 
+## 9. ADDENDUM: 2 more opcodes verified (0x14c + 0x150) -- REVEALS PATTERN
+
+Verified 2 speculated opcodes; the speculations were WRONG but in
+a way that REVEALS THE TRUE PATTERN.
+
+### Opcode 0x14c -- LARGE ACTION BATCH (64 records FIXED)
+
+```text
+NOT "status apply" as speculated.
+Actual: HARDCODED 64-record loop, each 112B (same as 0x148/0x149).
+
+Constructor: LargeActionBatch_construct_64records_112B_hardcoded
+(FUN_007715f0)
+
+Wire packet: 64 records x 112B = ~7168 bytes minimum.
+
+Likely use:
+  - RAID-WIDE combat log push (full instance event history)
+  - Full combat log refresh after resync
+  - Server-forced full state push for combat log
+  - DEBUG / instance damage tracker dump
+```
+
+### Opcode 0x150 -- EXTENDED STATUS LIST (32 slots)
+
+```text
+NOT "HP change" as speculated.
+Actual: HARDCODED 32-slot loop, each 6B (IDENTICAL format to 0x14f
+status list, just DOUBLE the slots).
+
+Constructor: ExtendedStatusList_construct_32slots_6B_hardcoded
+(FUN_00768ef0)
+
+Per-entry: ushort status_id + ushort duration + byte flag
+
+Likely use:
+  - EXTENDED status display (passives + actives combined)
+  - ABILITY LIST (32 known abilities visible)
+  - TARGET status display (32 slots showing target's effects)
+  - Tiered status display companion to 0x14f
+```
+
+### THE REAL PATTERN: variable-size lists
+
+```text
+The per-actor messages aren't randomly assigned -- they're
+LISTS OF VARYING SIZES with TWO PAYLOAD TYPES:
+
+TYPE A LISTS (112B per record = "ACTION RECORD"):
+  0x148 = 1 record   (single action)
+  0x149 = N records  (count at +0x380, variable batch)
+  0x14c = 64 records (fixed large batch)
+  (probably 0x14a/0x14b = other fixed sizes)
+  (probably 0x14d/0x14e = related variants)
+
+TYPE B LISTS (6B per entry = "STATUS ENTRY"):
+  0x14f = 16 slots   (primary status list)
+  0x150 = 32 slots   (extended status list)
+  (probably 0x151-0x156 = other 6B-entry lists at various sizes)
+
+REFINED HYPOTHESIS for remaining 10 opcodes:
+
+  0x14a = 4 records?    (small fixed action batch)
+  0x14b = 8 records?    (medium fixed action batch)
+  0x14d = 1 ushort?     (single status remove? 2-byte payload)
+  0x14e = ?             (other action variant)
+
+  0x151 = 64 slots?     (large status display)
+  0x152 = 1 ushort?     (single status add? 2-byte payload)
+  0x153 = ?             (different list type)
+  0x154-0x156 = other list types or sizes
+
+PATTERN INSIGHT: 1.x server pre-batches state updates by size into
+different opcodes. Client routes by opcode to the correct list
+constructor. This avoids the overhead of a "type byte + count" header
+in every packet.
+
+The trade-off: requires 15 distinct opcodes (one per list type/size),
+but each packet is highly compact (no header overhead for size info).
+```
+
+### Updated per-actor opcode table
+
+```text
+Opcode  Type  Verified semantic                         Status
+------  ----  -----------------                         ------
+0x148   A     SINGLE ACTION RESULT (1 x 112B)           VERIFIED
+0x149   A     VARIABLE ACTION BATCH (N x 112B)          VERIFIED
+0x14a   A     ?? (fixed action batch, size TBD)         INFERRED
+0x14b   A     ?? (fixed action batch, size TBD)         INFERRED
+0x14c   A     LARGE ACTION BATCH (64 x 112B)            VERIFIED
+0x14d   A     ?? (ushort payload variant)               INFERRED
+0x14e   A     ?? (other action variant)                 INFERRED
+0x14f   B     PRIMARY STATUS LIST (16 x 6B)             VERIFIED
+0x150   B     EXTENDED STATUS LIST (32 x 6B)            VERIFIED
+0x151   B     ?? (probably larger status list)          INFERRED
+0x152   B     ?? (ushort payload variant)               INFERRED
+0x153-0x156 B ?? (other status/event lists)             INFERRED
+
+15 opcodes total. 5 verified (33%). 10 inferred from pattern.
+```
+
+## 10. ADDENDUM: server-side combat protocol REFINED
+
+```text
+SERVER COMBAT MESSAGE STRATEGY:
+
+  Single small event:    send 0x148 (1 action record)
+  Multi-target event:    send 0x149 (variable batch)
+  Combat log refresh:    send 0x14c (full 64-record refresh)
+  
+  Status state change:   send 0x14f (16-slot primary list)
+  Extended status:       send 0x150 (32-slot extended list)
+  
+  HP/MP/Position update: send WorkSync 0x12F or
+                              MemberInfoUpdater 0x18b (if party)
+
+  System rejection/error: send 0x193 with appropriate code
+
+ADVANTAGE OF THIS DESIGN:
+  - Compact packets (no header per packet for size/type)
+  - Client list constructors can be optimized per fixed size
+  - Server can choose packet type based on data volume
+  
+DISADVANTAGE:
+  - Requires 15 distinct opcodes (vs ~5 if size was in header)
+  - Server logic more complex (must pick right opcode)
+```
+
 ## Commit suggestion
 
 ```
-docs(re/exe): per-actor messages SEMANTIZED -- 0x148/0x149 = ACTION RESULTS (single/batch 112B records); 0x14f = STATUS EFFECT LIST (16 x 6B slots)
+docs(re/exe): per-actor messages SEMANTIZED -- 0x148/0x149 = ACTION RESULTS (single/batch 112B records); 0x14f = STATUS EFFECT LIST (16 x 6B slots) [+addendum: 0x14c = 64-record action batch; 0x150 = 32-slot extended status; PATTERN revealed: 15 opcodes encode variable-size lists in 2 payload types]
 ```
