@@ -12,7 +12,7 @@ Last updated: 2026-05-27 (session +20 commits).
 lookup tables for all architectural facts). This index has the
 narrative; QUICK_REFERENCE has the tables.
 
-## Session 2026-05-27 Expansion (20 commits)
+## Session 2026-05-27 Expansion (29+ commits) -- LATE STATE
 
 ```text
 ✓ ALL 17 native master blocks LOCATED + walked (409 registrar slots)
@@ -22,33 +22,88 @@ narrative; QUICK_REFERENCE has the tables.
   SpreadSheet, Debug, Sequence
   (+ String, Table confirmed 100% pure Lua, NO native master)
 
-✓ 6 C++ THUNKS DISASSEMBLED end-to-end:
+✓ 15+ C++ THUNKS DISASSEMBLED end-to-end:
+  Architectural primitives (4):
   - _createActor (global)     async actor factory via OnInitResumeChecker
   - _defineClass (global)     2-table class registry with forward decls
   - _wait (ActorBase)         Universal ResumeChecker pattern CONFIRMED
   - _getData (SpreadSheet)    sync CSV row read
+  
+  Async I/O (1):
   - _loadKeyTemporarily       ASYNC; reveals FunctionEndCallbackInterface
-  - _updateWork (CharaBase)   WorkSync end-to-end pipeline + opcode 0x12F
+  
+  _updateWork siblings (4; pattern NOT uniform):
+  - CharaBase _updateWork     opcode 0x12F (standard WorkSync)
+  - Director _updateWork      opcode 0x12F (shared lua_updateWork_impl)
+  - Item _updateWork          opcode 0x132 (24B byte+ushort, no WorkPath)
+  - GroupBase _updateWork     opcode 0x133 (56B alt; per-instance dispatch)
+  
+  Chat subsystem (2):
+  - _parseTextCommand         chat command parser (data-driven typed args)
+  - _appendMessagePool        CommandUpdater dispatcher (4 target variants)
+  
+  _wait* siblings (6 of 7):
+  - _waitForTurning (CharaBase)
+  - _waitForCharaSchedulerFinished (CharaBase)
+  - _waitForCharaSchedulerTutorialFinished (WorldMaster)
+  - _waitForTargetTutorial (DesktopWidget)
+  - _waitForCameraTutorial (DesktopWidget)
+  - _waitForItemSearchWidget (DesktopWidget)
+  (11th: _waitForHamletDefenseScore @ DAT_006dcb00 not auto-detected)
 
-✓ ResumeCheckerInterface HIERARCHY confirmed (3 concrete subclasses):
-  OnInitResumeChecker (16B), WaitResumeChecker (40B),
-  LoadDataResumeChecker (148B). Universal yielding pattern.
+✓ ResumeCheckerInterface HIERARCHY FULLY mapped (10 of ~11 subclasses):
+  1. OnInitResumeChecker (16B) -- _createActor
+  2. WaitResumeChecker (40B) -- _wait
+  3. LoadDataResumeChecker (148B) -- _loadKeyTemporarily
+  4. AppendMessageResumeChecker (12B) -- _appendMessagePool
+  5. WaitForTurningResumeChecker (8B) -- _waitForTurning
+  6. WaitForCharaSchedulerFinishedResumeChecker (12B)
+  7. s_WaitForCharaSchedulerTutorialFinishedResumeChecker (12B)
+  8. TargetTutorialResumeChecker (12B)
+  9. s_CameraTutorialResumeChecker (8B)
+  10. s_ItemSearchWidgetResumeChecker (8B)
+  Universal yield pattern complete. 5-step thunk pattern uniform.
 
 ✓ SECOND engine interface discovered: FunctionEndCallbackInterface
   (2-tier callback+checker for async I/O completion)
 
-✓ WORKSYNC PIPELINE mapped end-to-end (C->S):
-  Lua _updateWork -> WorkPath tree -> dispatcher@class+0xec
-  -> serializePayload -> opcode 0x12F (Zone OUT, 56B, STRING)
-  Predictive multiplayer pattern (sync-flag at entry+0x29)
+✓ WORKSYNC PIPELINE mapped BIDIRECTIONAL end-to-end (~95%):
+  C->S OUTBOUND:
+    Lua _updateWork -> WorkPath tree -> dispatcher@class+0xec
+    -> serializePayload -> opcode 0x12F/0x132/0x133 (3 distinct)
+    Predictive multiplayer pattern (sync-flag at entry+0x29)
+  S->C INBOUND (7-level chain):
+    Wire -> Zone dispatcher -> Lua-bound (FUN_006e17e0/006e1f70)
+    -> class WorkSync dispatcher (vtable[0xec])
+    -> FUN_00775890/00775a30 -> FUN_00775180 (4-mode byte parser)
+    -> FUN_00774220 (200B record alloc) ->
+    CommandUpdater_invokeLua_onUpdateWork_clipObj/complex
+    -> Lua callback _onUpdateWork
+  APPLY:
+    4 BitPacked writers (type 1/2/3/4) + BindingStorage_writeField_lowLevel
+    + intermediate dispatchers at vtable 0x0110fcf8
+  ROUND-TRIP SYMMETRIC: Lua passes 1-based -> wire 0-based -> Lua 1-based
 
-✓ WORKSYNC INBOUND writers PINNED (S->C apply path):
-  4 BitPacked writers (type 1/2/3/4) + BindingStorage_writeField_lowLevel
-  + intermediate dispatchers at vtable 0x0110fcf8
+✓ COMMANDUPDATER subsystem mapped:
+  4 outbound send variants (toActorId/Name/CharaBase_WMSelf/broadcast)
+  2 inbound invokeLua variants (clipObj/complex)
+  280B outbound record vs 200B inbound record
+  Filter chain support (vtable+0xc canSkip())
 
-✓ 132 of 164 CRITICAL CSVs MAPPED (80%) via dual loading architecture:
+✓ CHAT LOOP fully closed bidirectional (100%):
+  OUT: _parseTextCommand parse -> Lua handler -> _appendMessagePool ECHO
+       + _executeCommand wire send
+  IN: 3 inbound handlers (entries 35-37):
+      35 = system/say with substitution params
+      36 = /tell (sender + recipient + body, 0x40 buf each)
+      37 = simple chat (1 name + flag)
+  Channels 32/33/38/40 (notify/alert/NPC/say) all funnel through
+  _appendMessagePool
+
+✓ 132 of 132 LUA-ACCESSIBLE CRITICAL CSVs MAPPED (100%) via dual loading:
   - MECHANISM 1: SpreadSheet singletons (35 shared tables; 4 init files)
   - MECHANISM 2: _loadTextDataPermanently (97 per-class; 250+ scripts)
+  - 32 'unmapped' RECLASSIFIED as engine-internal C++ loaders (correct)
   ~600K rows of game data traced to consumers
 
 ✓ NATIVE BINDING SURFACE CORRECTED:

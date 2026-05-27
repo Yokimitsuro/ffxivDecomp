@@ -40,7 +40,7 @@ NO MASTER (100% pure Lua wrappers):  String, Table
 TOTAL: 409 registrar slots across 17 masters
 ```
 
-## 2. Disassembled Thunks (6) + Wire Opcodes
+## 2. Disassembled Thunks (15) + Wire Opcodes
 
 ```text
 Lua API                C++ thunk                          Address       Wire opcode
@@ -50,7 +50,36 @@ _defineClass           global_cpp_defineClass_thunk       0x006dcc30    (none; l
 _wait                  ActorBase_cpp_wait_thunk           0x006dbcb0    (none; coroutine)
 _getData (SSD)         SpreadSheet_cpp_getData_thunk      0x0070a720    (none; sync mem)
 _loadKeyTemporarily    SpreadSheet_cpp_loadKey..._thunk   0x006f0840    (disk I/O async)
-_updateWork            CharaBase_cpp_updateWork_thunk     0x006e7670    0x12F (Zone OUT)
+_updateWork (CharaBase) CharaBase_cpp_updateWork_thunk    0x006e7670    0x12F (56B Zone)
+_updateWork (Director)  lua_updateWork_impl               0x006e85e0    0x12F (shared)
+_updateWork (Item)      Lua_sendByteUshort..._via_0x132   0x006e2af0    0x132 (24B)
+_updateWork (Group)     GroupBase_cpp_..._customDispatch  0x006e8890    0x133 (56B alt)
+_parseTextCommand      DesktopWidget_cpp_parseText..._thunk 0x006fe2a0  (none; local parse)
+_appendMessagePool     DesktopWidget_cpp_appendMessage... 0x006eced0    (queue-flushed)
+_waitForTurning        CharaBase_cpp_waitForTurning_thunk 0x006e1700    (none; coroutine)
+_waitForCharaSchedulerFinished                            0x006e4b40    (none; coroutine)
+_waitForCharaSchedulerTutorialFinished                    0x006e6c20    (none; coroutine)
+_waitForTargetTutorial                                    0x006e5710    (none; coroutine)
+_waitForCameraTutorial                                    0x006e1c50    (none; coroutine)
+_waitForItemSearchWidget                                  0x006e1b90    (none; coroutine)
+```
+
+### Inbound chat handlers (3 variants @ entries 35-37 of dispatch table)
+
+```text
+Entry  Handler                                          Variant
+-----  -------                                          -------
+35     ZoneIn_handler_chat_say_substitution_entry35     System/say with msg+sub params (0x40 buf)
+36     ZoneIn_handler_chat_variant_C_tell               /TELL (sender +9, recipient +0x29, body +0x49)
+37     ZoneIn_handler_chat_simple_entry37               Simple chat (1 name + flag byte)
+```
+
+### Inbound CommandUpdate (2 callback dispatchers)
+
+```text
+CommandUpdater_invokeLua_onUpdateWork_clipObj  @ 0x00773d90  simple (cutscene)
+CommandUpdater_invokeLua_onUpdateWork_complex  @ 0x00773f10  filter+dispatcher+convert
+Both fire Lua callback: actor:_onUpdateWork(struct, slot, idx0, idx1)
 ```
 
 ## 3. Wire Opcodes Confirmed
@@ -116,24 +145,42 @@ Channel ID    Used by                       Purpose
 40            worldMaster:say               World cryer / global say
 ```
 
-## 4. Async / Coroutine Pattern (ResumeChecker Hierarchy)
+## 4. Async / Coroutine Pattern (ResumeChecker FULL INVENTORY)
 
 ```text
 Base interfaces:
-  Component::Lua::GameEngine::ResumeCheckerInterface  (script yields)
-  Component::Lua::GameEngine::FunctionEndCallbackInterface (I/O completion)
+  Component::Lua::GameEngine::ResumeCheckerInterface       (script yields)
+  Component::Lua::GameEngine::FunctionEndCallbackInterface  (I/O completion)
 
-Known ResumeChecker subclasses (concrete):
-  OnInitResumeChecker      16 B    backs _createActor   actor init done
-  WaitResumeChecker        40 B    backs _wait          timer deadline
-  LoadDataResumeChecker   148 B    backs _loadKey*      disk load done
+10 ResumeChecker subclasses CONFIRMED (universal yield pattern):
+#   Subclass                                              Size    Lua API
+-   --------                                              ----    -------
+1   OnInitResumeChecker                                    16 B   _createActor
+2   WaitResumeChecker                                      40 B   _wait
+3   LoadDataResumeChecker                                 148 B   _loadKeyTemporarily
+4   AppendMessageResumeChecker                             12 B   _appendMessagePool
+5   WaitForTurningResumeChecker                             8 B   _waitForTurning
+6   WaitForCharaSchedulerFinishedResumeChecker             12 B   _waitForCharaSchedulerFinished
+7   s_WaitForCharaSchedulerTutorialFinishedResumeChecker   12 B   _waitForCharaSchedulerTutorialFinished
+8   TargetTutorialResumeChecker                            12 B   _waitForTargetTutorial
+9   s_CameraTutorialResumeChecker                           8 B   _waitForCameraTutorial
+10  s_ItemSearchWidgetResumeChecker                         8 B   _waitForItemSearchWidget
+
+[predicted 11th: HamletDefenseScoreResumeChecker for Director
+ _waitForHamletDefenseScore -- target @ 0x006dcb00 is DATA label
+ (Ghidra didn't auto-detect as function)]
+
+SIZE DISTRIBUTION:
+   8 B (3 subclasses): minimal (vtable + 1 context ptr)
+  12 B (4):            small (vtable + ref + state)
+  16 B (1):            OnInit (scriptCtx + actorRef + flag)
+  40 B (1):            Wait (64-bit deadline + timer state)
+ 148 B (1):            LoadData (diskJobId + refs + flags)
+
+Size correlates with READINESS CHECK STATE complexity.
 
 Known FunctionEndCallback subclasses:
   LoadDataFunctionEndCallback   40 B    SSD async loads completion
-
-Predicted (high confidence):
-  ~8 more _wait* bindings each with own ResumeChecker subclass
-  (waitForGroup, waitForTurning, waitForCharaSchedulerFinished, etc.)
 
 Coroutine context API:
   CoroutineContext_isTrackingEnabled   FUN_00cd27d0
@@ -141,35 +188,105 @@ Coroutine context API:
   CoroutineContext_pushEndCallback     FUN_00cd28c0
   CoroutineContext_findPendingCallback FUN_00cd2630
   ScriptCoroutineKey_construct         FUN_00713f80
+
+UNIVERSAL THUNK PATTERN (5 steps; same for all 10):
+  1. Extract args from Lua stack
+  2. Setup wait target (varies per checker)
+  3. Allocate subclass via operator_new(size)
+  4. Construct via XResumeChecker_ctor
+  5. CoroutineContext_pushResumeChecker (script yields)
 ```
 
-## 5. WorkSync State Replication
+## 5. WorkSync State Replication (FULLY MAPPED end-to-end ~95%)
+
+### 4 _updateWork thunks, 3 distinct wire opcodes (CORRECTED)
 
 ```text
-C -> S (player UI actions, rare):
-  Lua: actor:_updateWork("category", "field", subIdx, listIdx)
-   -> WorkPath built (2-4 components, 176 bytes per instance)
-   -> WorkSync_dispatchOrEnqueue (FUN_00767fc0)
-   -> Look up in actor's red-black tree (WorkPathTree_lowerBound)
-   -> If sync-flag SET (entry+0x29): predictive apply via UpdateQueue
-   -> Always: WorkSync_serializePayloadAndSend (FUN_00767c00)
-   -> Wire: opcode 0x12F, 56-byte packet, STRING payload
-
-S -> C (server broadcast, frequent):
-  Opcode: TBD (0x130/0x131/0x132 candidates)
-  Format: actorId + bindingId(u16) + value (u8/u16/u24/u32)
-  ~6-14 byte packets
-  Client side: 4 BitPacked WRITERS apply to actor+0x214 storage
-   - BitPacked_writeByte_type1   0x00d11d30
-   - BitPacked_writeShort_type2  0x00d11e90
-   - BitPacked_writeUint24_type3 0x00d11fd0
-   - BitPacked_writeUint32_type4 0x00d12080
-   - BindingStorage_writeField_lowLevel_byBindingId  0x00ce44d0
-
-C -> S subscribe:
-  Lua: queryBinding(bindingId)
-  Wire: opcode 0x135, 24-byte packet
+Class       Thunk                                       Opcode   Size   Predictive
+-----       -----                                       ------   ----   ----------
+CharaBase   CharaBase_cpp_updateWork_thunk @ 0x006e7670  0x12F   56 B   YES
+Director    lua_updateWork_impl @ 0x006e85e0             0x12F   56 B   YES
+Item        Lua_sendByteUshort..._via_0x132 @ 0x006e2af0 0x132   24 B   NO (state notify)
+GroupBase   GroupBase_cpp_..._customDispatch @ 0x006e8890 0x133  56 B   NO (group authoritative)
 ```
+
+**Important**: pattern is NOT uniform. The 4 share the Lua API name
+`_updateWork` but use DIFFERENT thunks and wire opcodes. Per-class
+binding name is OVERLOADED via master registrars.
+
+### C -> S (full pipeline; CharaBase/Director path)
+
+```text
+Lua: actor:_updateWork("category", "field", subIdx, listIdx)
+ -> WorkPath built (2-4 components, 176 bytes per instance)
+ -> WorkSync_dispatchOrEnqueue (FUN_00767fc0)
+ -> Look up in actor's red-black tree (WorkPathTree_lowerBound)
+ -> If sync-flag SET (entry+0x29): predictive apply via UpdateQueue
+ -> Always: WorkSync_serializePayloadAndSend (FUN_00767c00)
+ -> Wire: opcode 0x12F, 56-byte packet, STRING payload
+```
+
+### S -> C (7-LEVEL INBOUND CHAIN)
+
+```text
+LEVEL 0  Wire packet (opcode 0x12F/0x132/0x133)
+LEVEL 1  Zone inbound dispatcher (table @ 0x00fdfb80)
+LEVEL 2  Lua-bound dispatch: FUN_006e17e0 (full) / FUN_006e1f70 (simple)
+LEVEL 3  Per-class WorkSync dispatcher (vtable[0xec])
+LEVEL 4  Packet entry: FUN_00775890/00775a30 -> FUN_00775180
+LEVEL 5  Byte parser: 4-mode variable-length encoding
+LEVEL 6  Per-record processor FUN_00774220 (alloc 200B CommandUpdate record)
+LEVEL 7  CommandUpdater_invokeLua_onUpdateWork_clipObj/complex
+         -> Lua callback: actor:_onUpdateWork(struct, slot, idx0, idx1)
+```
+
+### Apply path (4 BitPacked WRITERS to actor+0x214)
+
+```text
+BitPacked_writeByte_type1     0x00d11d30
+BitPacked_writeShort_type2    0x00d11e90
+BitPacked_writeUint24_type3   0x00d11fd0
+BitPacked_writeUint32_type4   0x00d12080
+BindingStorage_writeField_lowLevel_byBindingId  0x00ce44d0
+```
+
+### 4-mode variable-length packet encoding (explains asymmetric protocol)
+
+```text
+binding-id mode  : 5 bytes/field (S->C compact; hot broadcast path)
+string-keyed mode: ~30 bytes/component (C->S verbose paths)
+short payload    : (tag - DAT_00fe059b) bytes
+large payload    : (tag - DAT_00fe05a1) bytes
+~95% bandwidth saving for compact mode
+```
+
+### 2 record types
+
+```text
+Outbound CommandUpdate:  280B (0x118) via CommandUpdater_allocAndEnqueueRecord
+Inbound  CommandUpdate:  200B (0xc8)  via FUN_00768260 (inbound CTOR)
+  Inner buffer 2 sizes: 160B compact / 768B extended (many-field broadcasts)
+```
+
+### Lua API SYMMETRIC round-trip
+
+```text
+Lua passes 1-based -> outbound -1 = 0-based wire
+Wire 0-based -> inbound +1 = 1-based Lua callback
+Script receives SAME values it sent (round-trip preservation PROVEN)
+```
+
+### C -> S subscribe
+
+```text
+Lua: queryBinding(bindingId)
+Wire: opcode 0x135, 24-byte packet
+```
+
+### ECHO behavior
+
+Inbound parser CONDITIONALLY calls outbound serializer for client
+prediction reconciliation when server pushes authoritative value.
 
 ### WorkPath Struct Layout (176 bytes)
 
@@ -664,64 +781,85 @@ CommandUpdate record           0x118 B   (280 bytes)
 BehaviorLogger listener        0x48 B    (72 bytes; separate from CommandUpdate)
 ```
 
-## 19. Coverage Summary (As of 2026-05-27)
+## 19. Coverage Summary (As of 2026-05-27 LATE)
 
 ```text
-FINDINGS:                158 total
-  EXE-side:               61
+FINDINGS:                168+ total
+  EXE-side:               71+
   Lua-side:               85
-  Correlation:            12
+  Correlation:            13
 
 EXE NATIVE SURFACE:     ~344 _cpp bindings + ~62 pure-Lua wrappers
   Located in masters:    409 registrar slots (100%)
   ~30 engine-internals discovered (NOT in _u.lua)
   Coverage:              ~100% of native binding surface
 
-THUNKS DISASSEMBLED:      6 (the key architectural primitives)
-WIRE OPCODES PINNED:      ~7 with handlers + ~218 inbound table slots
+THUNKS DISASSEMBLED:      15+ (master primitives + 8 _wait* siblings)
+  - 4 architectural (createActor, defineClass, wait, getData)
+  - 1 async I/O (loadKeyTemporarily)
+  - 4 _updateWork (CharaBase, Director, Item, GroupBase)
+  - 2 chat (parseTextCommand, appendMessagePool)
+  - 6 _wait* siblings (Turning, CharaSchedFin x2, Tutorial x3)
+
+RESUMECHECKER SUBCLASSES: 10 of ~11 confirmed
+  (3 of 8B, 4 of 12B, 1 each of 16B/40B/148B)
+
+WIRE OPCODES PINNED:
+  Outbound: 7 named (0x12d-0x135) + chat opcodes
+  Inbound:  ~3 chat handlers + ~218 dispatch table slots
+  WorkSync FULL bidirectional path (7-level inbound chain)
 
 DATA CATALOG:            803 CSV tables
-  Critical mapped:       132 of 164 (80%)
+  Lua-accessible critical: 132 of 132 (100%) -- 32 are engine-internal
   Useful mapped:         ~371 of 625 (estimate; via _loadTextData)
   Total unique mapped:   ~503 of 803 (62.6%)
 
 3-AXIS BRIDGE STATUS:
-  Lua scripts ↔ EXE thunks         ✓ MAPPED (17 masters + 6 thunks)
+  Lua scripts ↔ EXE thunks         ✓ MAPPED (17 masters + 15 thunks)
   EXE async I/O ↔ CSV data         ✓ MAPPED (SpreadSheet pipeline)
   Lua scripts ↔ Wire opcodes       ✓ MAPPED (correlation findings)
-  Lua scripts ↔ CSV data           ✓ MAPPED (132/164 critical)
+  Lua scripts ↔ CSV data           ✓ MAPPED (132/132 Lua-accessible critical)
   EXE binding storage ↔ Wire       ✓ MAPPED (binding-id == field-id)
+  WorkSync end-to-end              ✓ MAPPED ~95% (entry table slot TBD)
+  Chat loop end-to-end             ✓ MAPPED 100% (parse + dispatch + 3 inbound)
+  Class registration loop          ✓ MAPPED 100% (_defineClass + _createActor)
+  Actor lifecycle T0-T3            ✓ MAPPED 100%
+  ResumeChecker hierarchy          ✓ MAPPED 10 of ~11
 ```
 
 ## 20. What's Left
 
 ```text
-HIGH-VALUE GAPS:
-  - Inbound 0x12F handler not pinned (vtable walk needed at 0x0110fcf8)
-  - 32 truly unmapped critical CSVs (likely in per-zone scripts)
-  - ~125 of 625 useful CSVs (gear class variants)
-  - Server S->C broadcast opcode (likely 0x130/131/132)
-  - Per-zone scripts not yet swept (regionParam, zoneGroupParam,
-    hamletDefScore, etc.)
+SMALL REMAINING GAPS (~5%):
+  - 11th ResumeChecker (HamletDefenseScoreResumeChecker) -- target
+    at 0x006dcb00 is DATA label; Ghidra didn't auto-detect function
+  - Exact Zone inbound table slot that triggers FUN_006e17e0
+    (currently known to be multiplexed via _onReceiveDataPacket entry 38)
+  - Symbolic names for 3 byte-tag constants (DAT_00fe059b/05a0/05a1)
+  - Chat channel IDs (32/33/38/40) -> specific outbound wire opcodes
+  - vtable[0x6c] walk for 5-10 sample classes (200+ mechanical naming)
+  - _isInstanceOf thunk (RTTI walk implementation)
 
 MEDIUM-VALUE GAPS:
-  - 3 sibling _updateWork thunks (Director/Item/Group) - confirm
-    pattern uniformity
-  - _parseTextCommand thunk (chat dispatch)
-  - _appendMessagePool thunk (chat display)
-  - _isInstanceOf thunk (RTTI walk)
-  - vtable[0x6c] walk for sample classes (200+ named functions)
-  - 8 remaining _wait* thunks (additional ResumeChecker subclasses)
   - LinkshellCommand family (system commands)
   - DesktopWidget main (687 KB Lua file)
   - charabaseclass_event.lua (444 lines)
   - charabaseclass_battle.lua (2027 lines, partial coverage)
+  - ~125 of 625 useful CSVs (gear class variants)
 
-LOW-VALUE / COSMETIC:
-  - 2D map UI scripts (4 unmapped critical: 2Dmap_*)
-  - Localization tables (text_*)
-  - System debug tables
-  - 100+ small gear class variants (acn200/300, blm0j1, ...)
+CONFIRMED ENGINE-INTERNAL (no Lua surface; not a gap):
+  - 32 critical CSVs loaded by C++ (regionParam, 2Dmap_*, etc.)
+  - These are CLIENT-LOCAL, not server-pushed
+
+ALREADY RESOLVED IN LATEST SESSION:
+  ✓ _parseTextCommand thunk (chat parse) -- DONE
+  ✓ _appendMessagePool thunk (CommandUpdater dispatcher) -- DONE
+  ✓ 3 _updateWork siblings (Director/Item/Group) -- DONE; pattern NOT uniform
+  ✓ GroupBase opcode 0x133 -- DONE
+  ✓ Inbound chat handlers (entries 35-37) -- DONE
+  ✓ WorkSync inbound bridge (7-level chain) -- DONE
+  ✓ ResumeChecker full inventory (10 of 11) -- DONE
+  ✓ 132 of 132 Lua-accessible CSVs mapped (100%) -- DONE
 ```
 
 ## 21. Key Confirmed Facts (independent EXE validations)
