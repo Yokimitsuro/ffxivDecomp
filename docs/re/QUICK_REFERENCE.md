@@ -1,11 +1,12 @@
 # Quick Reference: FFXIV 1.x Architecture Lookup Tables
 
-**Single-page reference for the most-used facts** from the 158
-findings (61 EXE + 85 Lua + 12 correlation). Use this when you need a
+**Single-page reference for the most-used facts** from the 173+
+findings (66 EXE + 86 Lua + 13 correlation). Use this when you need a
 fast lookup; refer to the named finding files for full context.
 
-Last updated: 2026-05-27 (expanded: added factories, layout offsets,
-class hierarchy, time/bandwidth, 3-paradigm bridge, channel constants).
+Last updated: 2026-05-28 (added: spawn pipeline 6-stage, Application
+main tick + per-frame dispatch, class system thunk family complete,
+DesktopWidget Lua connector, 15 RTTI types confirmed, 11th ResumeChecker).
 
 For historical narrative + pre-session findings, see
 `MASTER_INDEX_1.x_MODEL.md`.
@@ -62,6 +63,21 @@ _waitForCharaSchedulerTutorialFinished                    0x006e6c20    (none; c
 _waitForTargetTutorial                                    0x006e5710    (none; coroutine)
 _waitForCameraTutorial                                    0x006e1c50    (none; coroutine)
 _waitForItemSearchWidget                                  0x006e1b90    (none; coroutine)
+_isInstanceOf          global_isInstanceOf_thunk_dualDispatch_   0x006ff210  (none; local; dual)
+                        7rtti_plus_luaChain                                   7 RTTI fast-path + Lua chain
+_canCreateActorByName  global_canCreateActorByName_thunk_        0x006ff1a0  (none; local)
+                        creatabilityCheck                                     class registry + 3 tag check
+```
+
+### Class-system thunk family (4 complete; covers the entire Lua class API)
+
+```text
+Thunk                       Address         Bound name              Role
+-----                       -------         ----------              ----
+_defineClass                0x006e4d20      "_defineClass"          Register class into parent chain
+_createActor                0x006e1700      "_createActor"          Instantiate via vtable[0x6c]
+_isInstanceOf               0x006ff210      "_isInstanceOf"         Dual-dispatch type check
+_canCreateActorByName       0x006ff1a0      "_canCreateActorByName" Creatability pre-check
 ```
 
 ### Inbound chat handlers (3 variants @ entries 35-37 of dispatch table)
@@ -152,9 +168,9 @@ Base interfaces:
   Component::Lua::GameEngine::ResumeCheckerInterface       (script yields)
   Component::Lua::GameEngine::FunctionEndCallbackInterface  (I/O completion)
 
-10 ResumeChecker subclasses CONFIRMED (universal yield pattern):
-#   Subclass                                              Size    Lua API
--   --------                                              ----    -------
+11 ResumeChecker subclasses CONFIRMED (universal yield pattern):
+#   Subclass                                              Size    Lua API / role
+-   --------                                              ----    --------------
 1   OnInitResumeChecker                                    16 B   _createActor
 2   WaitResumeChecker                                      40 B   _wait
 3   LoadDataResumeChecker                                 148 B   _loadKeyTemporarily
@@ -165,8 +181,9 @@ Base interfaces:
 8   TargetTutorialResumeChecker                            12 B   _waitForTargetTutorial
 9   s_CameraTutorialResumeChecker                           8 B   _waitForCameraTutorial
 10  s_ItemSearchWidgetResumeChecker                         8 B   _waitForItemSearchWidget
+11  LpbLoader::ResumeChecker                              ~120 B  ENGINE-INTERNAL (LPB bytecode loader)
 
-[predicted 11th: HamletDefenseScoreResumeChecker for Director
+[possible 12th: HamletDefenseScoreResumeChecker for Director
  _waitForHamletDefenseScore -- target @ 0x006dcb00 is DATA label
  (Ghidra didn't auto-detect as function)]
 
@@ -622,6 +639,100 @@ PARADIGM 3: timed dispatchers (engine polls Lua state periodically)
             WorkSync delta-broadcast at server tick
 ```
 
+## 13a. Spawn Pipeline (6 stages, typed-packet ring-buffer)
+
+```text
+Spawn architecture: NOT a simple wire opcode -- a TYPED PACKET
+OBJECT SYSTEM via Group::PacketRequestBase polymorphic hierarchy.
+
+Stage  Function                                                   Address
+-----  --------                                                   -------
+T0     SpawnPipeline_T0_perTickPump_processQueue                  0x006cdd20
+T1     SpawnPipeline_T1_ringBufferConsumer_castEntryBuilderBase   0x006cda80
+T2     SpawnPipeline_T2_orchestrate_listObject_emits_0x130_pair   0x006cd8e0
+T3     SpawnPipeline_T3_dispatch2plusN_actorsList                 0x006db9a0
+T4     SpawnPipeline_T4_buildAndDispatchToAllocator               0x006cbc90
+T5     SpawnPipeline_T5_allocateActor_84B_invokeOnInit_           0x006c8cf0
+       ackVia_0x133
+
+Ring buffer at instance+0x20 (head +0x28, size +0x2c, cap +0x24)
+Up to 2 entries processed per per-frame call.
+
+OUTBOUND ACK per spawn:
+  2x opcode 0x130 (listObjectQueueAdd + Delete = list-lifecycle ACK)
+  1x opcode 0x133 (T5 WorkSync init ACK)
+
+Sizes:
+  Actor instance:  84 bytes (0x54) via operator_new in T5
+  WorkRecord:      72 bytes (0x48) in T4 if class has work fields
+```
+
+## 13b. Application Main Loop + Per-Frame Tick (CAPSTONE)
+
+```text
+Win32 message loop (outer)
+   ↓
+Application_mainTick_perFrame_eventLoopAndSubsystems  @ 0x004da680
+   ↓ (3 startup gates: +0x4a8, +0x17444, +0x174dc)
+PerFrameTick_Subsystems_widgets_zone_spawn_etc        @ 0x00578970
+   ↓
+[Widget x4] [Spawn T0 at slot[6]] [Timeout @ slot[10]] ... 15+ slots
+
+Subsystem container slots (this+N):
+  this[2-5]   4 widget container ticks
+  this[6]     SPAWN PIPELINE (perFrameWrapper -> T0)         CONFIRMED
+  this[7-9]   3 unmapped subsystems
+  this[10]    Timeout monitor (900-frame / 15-sec threshold)  CONFIRMED
+  this[11-12] 2 unmapped subsystems
+  this[1]+0x110/+0x114  2 more subsystems
+  this[0xd]   Pluggable subsystem (vtable[+8])
+
+EXPLAINS THE 2-PER-FRAME SPAWN RATE:
+  - T1 reads 2 entries per call
+  - perFrameWrapper calls T1 once per frame
+  - At 60 Hz: 120 spawn/sec max -> 50-actor zone = ~417ms ramp
+  - At 30 Hz: 60 spawn/sec max -> 833ms ramp
+  - This IS the "fade-in" at zone enter in 1.x
+
+INPUT EVENT ENCODING (32-bit packed at this+0x17828):
+  Bits 0xe0000000  Event tag (0xc0 = routed dispatch)
+  Bits 0x0e000000  Subsystem ID (4 bits; 3 known: 0/1/2)
+  Bits 0x00ffffff  Payload (24 bits)
+
+  Tag 0xc0 routes to DAT_01336b60 + (subsys_id * 24) handler table.
+```
+
+## 13c. RTTI Types Confirmed (15 total)
+
+```text
+NAMESPACE: Component::Lua::GameEngine::
+  - LuaControl::RTTI_Type_Descriptor                    (universal source)
+  - ResumeCheckerInterface::vftable                     (async base)
+  - FunctionEndCallbackInterface::vftable               (I/O base)
+  - LpbLoader::ResumeChecker::vftable                   (LPB loader)
+
+NAMESPACE: Application::Lua::Script::Client::Control::
+  - ActorBase                                           (universal supertype)
+  - CharaBase
+  - PlayerBase
+  - MyPlayer
+  - NpcBase
+  - AreaBase
+  - DirectorBase
+  - DesktopWidget
+  - WorldMaster
+
+NAMESPACE: Application::Lua::Script::Client::Group::   ← NEW NAMESPACE
+  - PacketRequestBase                                   (typed packet root)
+  - EntryBuilderBase                                    (actor spawn packet)
+
+Used by:
+  - _isInstanceOf (6 RTTI types in hardcoded fast-path; ActorBase
+    short-circuited to TRUE because universal)
+  - SpawnPipeline T1 (Group:: packet hierarchy)
+  - Various other ___RTDynamicCast call sites
+```
+
 ## 14. Eorzea Time & Bandwidth Model
 
 ```text
@@ -649,7 +760,14 @@ GENERAL PARAMETER (player stats):
 
 ## 15. Key Findings by Category (jump points)
 
-### EXE Architecture (this session's flagship findings)
+### EXE Architecture (2026-05-28 SESSION -- newest)
+
+- `finding_application_mainTick_and_per_frame_subsystem_dispatch.md` -- CAPSTONE: main loop + per-frame tick
+- `finding_spawn_pipeline_typed_packet_ring_buffer_6_stage_architecture.md` -- SPAWN 6-stage; Group:: namespace
+- `finding_isInstanceOf_thunk_dual_dispatch_rtti_plus_luachain.md` -- 7 RTTI + Lua chain walk
+- `finding_canCreateActorByName_thunk_creatability_check.md` -- class system thunk family complete
+
+### EXE Architecture (2026-05-27 session findings)
 
 - `finding_smallmodules_inventory_closed_17_masters.md` -- the 17-master inventory
 - `finding_createActor_thunk_async_actor_factory.md` -- async actor creation
@@ -659,6 +777,7 @@ GENERAL PARAMETER (player stats):
 - `finding_worksync_inbound_writers_pinned.md` -- 4 BitPacked writers
 - `finding_spreadsheet_thunks_exe_data_bridge.md` -- EXE-Data bridge
 - `finding_inbound_dispatch_table_found.md` -- 224-slot inbound table
+- `finding_resumechecker_11th_subclass_LpbLoader_plus_vtable_methodology.md` -- 11th ResumeChecker + RTTI methodology
 
 ### EXE Architecture (prior sessions; reference)
 
@@ -675,6 +794,10 @@ GENERAL PARAMETER (player stats):
 - `finding_bootup_state_machine.md` -- ~58 bootup states
 - `finding_invokeLua_roster_closed_80_complete.md` -- 80 invokeLua callbacks
 - `finding_widget_3tier_dispatcher_architecture.md` -- 3-tier widget dispatch
+
+### Lua Architecture (2026-05-28 SESSION -- newest)
+
+- `finding_desktopwidget_connector_main_orchestrator_architecture.md` -- DesktopWidget connector (26,564 lines, 255 methods, 13 subsystems)
 
 ### Lua Architecture
 
@@ -759,6 +882,30 @@ VTABLE INHERITANCE (CRITICAL):
 
 This is why 200+ pure-Lua classes can be spawned via _createActor:
 they all defer to their nearest C++ ancestor's vtable[0x6c].
+
+CLASS SYSTEM THUNK FAMILY (4 complete -- covers entire Lua class API):
+  _defineClass            (0x006e4d20)  Registers class
+  _createActor            (0x006e1700)  Instantiates via vtable[0x6c]
+  _isInstanceOf           (0x006ff210)  DUAL DISPATCH (7 RTTI fast-path
+                                         + Lua chain walk fallback)
+  _canCreateActorByName   (0x006ff1a0)  Creatability pre-check
+                                         (3 non-creatable category tags)
+
+_isInstanceOf HOT-PATH (7 hardcoded C++ class names):
+  ActorBaseClass    -> TRUE unconditionally (universal supertype)
+  CharaBaseClass    -> ___RTDynamicCast
+  PlayerBaseClass   -> ___RTDynamicCast
+  NpcBaseClass      -> ___RTDynamicCast
+  AreaBaseClass     -> ___RTDynamicCast
+  DirectorBaseClass -> ___RTDynamicCast
+  DesktopWidget     -> ___RTDynamicCast
+
+  ALL ___RTDynamicCast calls use LuaControl as SOURCE -- proves the
+  invariant that every Lua-passable instance derives from LuaControl.
+
+DYNAMIC FALLBACK (any other class name):
+  - Resolve name -> classId via LuaClass_resolveOrRegisterClassByName
+  - Walk instance+0xc chain comparing +0x54 against classId
 ```
 
 ## 18. Class-Specific Record Sizes (EXE-confirmed)
@@ -781,12 +928,12 @@ CommandUpdate record           0x118 B   (280 bytes)
 BehaviorLogger listener        0x48 B    (72 bytes; separate from CommandUpdate)
 ```
 
-## 19. Coverage Summary (As of 2026-05-27 LATE)
+## 19. Coverage Summary (As of 2026-05-28)
 
 ```text
-FINDINGS:                168+ total
-  EXE-side:               71+
-  Lua-side:               85
+FINDINGS:                173+ total
+  EXE-side:               75+
+  Lua-side:               86
   Correlation:            13
 
 EXE NATIVE SURFACE:     ~344 _cpp bindings + ~62 pure-Lua wrappers
@@ -794,15 +941,22 @@ EXE NATIVE SURFACE:     ~344 _cpp bindings + ~62 pure-Lua wrappers
   ~30 engine-internals discovered (NOT in _u.lua)
   Coverage:              ~100% of native binding surface
 
-THUNKS DISASSEMBLED:      15+ (master primitives + 8 _wait* siblings)
+THUNKS DISASSEMBLED:      17+ (master primitives + 8 _wait* + class system)
   - 4 architectural (createActor, defineClass, wait, getData)
   - 1 async I/O (loadKeyTemporarily)
+  - 2 class system NEW (_isInstanceOf dual dispatch, _canCreateActorByName)
   - 4 _updateWork (CharaBase, Director, Item, GroupBase)
   - 2 chat (parseTextCommand, appendMessagePool)
   - 6 _wait* siblings (Turning, CharaSchedFin x2, Tutorial x3)
 
-RESUMECHECKER SUBCLASSES: 10 of ~11 confirmed
-  (3 of 8B, 4 of 12B, 1 each of 16B/40B/148B)
+RESUMECHECKER SUBCLASSES: 11 confirmed (was 10)
+  Sizes: 3 of 8B, 4 of 12B, 1 each of 16B/40B/120B/148B
+  Latest add: LpbLoader::ResumeChecker (engine-internal, ~120B)
+
+RTTI TYPES CONFIRMED: 15 total
+  4 in Component::Lua::GameEngine::
+  9 in Application::Lua::Script::Client::Control::
+  2 in Application::Lua::Script::Client::Group::  (NEW namespace)
 
 WIRE OPCODES PINNED:
   Outbound: 7 named (0x12d-0x135) + chat opcodes
@@ -815,51 +969,58 @@ DATA CATALOG:            803 CSV tables
   Total unique mapped:   ~503 of 803 (62.6%)
 
 3-AXIS BRIDGE STATUS:
-  Lua scripts ↔ EXE thunks         ✓ MAPPED (17 masters + 15 thunks)
+  Lua scripts ↔ EXE thunks         ✓ MAPPED (17 masters + 17 thunks)
   EXE async I/O ↔ CSV data         ✓ MAPPED (SpreadSheet pipeline)
   Lua scripts ↔ Wire opcodes       ✓ MAPPED (correlation findings)
   Lua scripts ↔ CSV data           ✓ MAPPED (132/132 Lua-accessible critical)
   EXE binding storage ↔ Wire       ✓ MAPPED (binding-id == field-id)
   WorkSync end-to-end              ✓ MAPPED ~95% (entry table slot TBD)
   Chat loop end-to-end             ✓ MAPPED 100% (parse + dispatch + 3 inbound)
-  Class registration loop          ✓ MAPPED 100% (_defineClass + _createActor)
+  Class registration loop          ✓ MAPPED 100% (4-thunk family complete)
   Actor lifecycle T0-T3            ✓ MAPPED 100%
-  ResumeChecker hierarchy          ✓ MAPPED 10 of ~11
+  ResumeChecker hierarchy          ✓ MAPPED 11 confirmed (was 10)
+  SPAWN pipeline drain side        ✓ MAPPED 100% (6-stage T0-T5)  NEW
+  SPAWN pipeline wire/producer     ⊘ NOT YET MAPPED (async network path)
+  Main loop architecture           ✓ MAPPED 100% (2-level tick)    NEW
+  DesktopWidget UI orchestrator    ✓ MAPPED (13 subsystems, 255 m) NEW
 ```
 
 ## 20. What's Left
 
 ```text
-SMALL REMAINING GAPS (~5%):
-  - 11th ResumeChecker (HamletDefenseScoreResumeChecker) -- target
+SMALL REMAINING GAPS (~3%):
+  - 12th ResumeChecker (HamletDefenseScoreResumeChecker) -- target
     at 0x006dcb00 is DATA label; Ghidra didn't auto-detect function
   - Exact Zone inbound table slot that triggers FUN_006e17e0
     (currently known to be multiplexed via _onReceiveDataPacket entry 38)
   - Symbolic names for 3 byte-tag constants (DAT_00fe059b/05a0/05a1)
   - Chat channel IDs (32/33/38/40) -> specific outbound wire opcodes
   - vtable[0x6c] walk for 5-10 sample classes (200+ mechanical naming)
-  - _isInstanceOf thunk (RTTI walk implementation)
+  - SPAWN wire-side: wire opcode that produces PacketRequestBase
+    instances (likely 0x12d tagged container; needs network I/O thread trace)
+  - 10 unmapped subsystems in PerFrameTick (slots [7-9], [11-12], 1+0x110/+0x114, 0xd)
 
 MEDIUM-VALUE GAPS:
   - LinkshellCommand family (system commands)
-  - DesktopWidget main (687 KB Lua file)
   - charabaseclass_event.lua (444 lines)
   - charabaseclass_battle.lua (2027 lines, partial coverage)
+  - desktopwidget_itemdetail.lua (10,687 lines)
+  - equipwidget.lua (10,072 lines)
+  - retaineritemlistwidget.lua (9,654 lines)
   - ~125 of 625 useful CSVs (gear class variants)
 
 CONFIRMED ENGINE-INTERNAL (no Lua surface; not a gap):
   - 32 critical CSVs loaded by C++ (regionParam, 2Dmap_*, etc.)
   - These are CLIENT-LOCAL, not server-pushed
 
-ALREADY RESOLVED IN LATEST SESSION:
-  ✓ _parseTextCommand thunk (chat parse) -- DONE
-  ✓ _appendMessagePool thunk (CommandUpdater dispatcher) -- DONE
-  ✓ 3 _updateWork siblings (Director/Item/Group) -- DONE; pattern NOT uniform
-  ✓ GroupBase opcode 0x133 -- DONE
-  ✓ Inbound chat handlers (entries 35-37) -- DONE
-  ✓ WorkSync inbound bridge (7-level chain) -- DONE
-  ✓ ResumeChecker full inventory (10 of 11) -- DONE
-  ✓ 132 of 132 Lua-accessible CSVs mapped (100%) -- DONE
+RESOLVED IN 2026-05-28 SESSION:
+  ✓ _isInstanceOf thunk (RTTI walk implementation) -- DONE; DUAL DISPATCH
+  ✓ _canCreateActorByName -- DONE; 4-thunk class family complete
+  ✓ DesktopWidget main 687 KB Lua file -- DONE; 13 subsystems, 255 methods
+  ✓ Spawn pipeline 6-stage architecture (T0-T5) -- DONE; +2 RTTI types
+  ✓ Application main tick + per-frame dispatch -- DONE; CAPSTONE
+  ✓ 11th ResumeChecker (LpbLoader::ResumeChecker) -- DONE
+  ✓ Subsystem[10] (timeout monitor 900-frame threshold) -- DONE
 ```
 
 ## 21. Key Confirmed Facts (independent EXE validations)
@@ -883,6 +1044,16 @@ ALREADY RESOLVED IN LATEST SESSION:
 - 1.x had GRAND COMPANY (not Free Company; FC came in ARR 2.0+)
 - 1.x had NO player housing (the "Wards" are NPC trade districts)
 - Materia + Bazaar existed in 1.x (precursor to ARR)
+- 15 RTTI types confirmed (LuaControl is universal SOURCE for all dynamic casts)
+- 2 NEW namespaces beyond Control:: -- Group::PacketRequestBase /
+  EntryBuilderBase (typed-packet hierarchy for spawn)
+- Actor spawn = 84 bytes (operator_new in T5); WorkRecord = 72 bytes (T4)
+- Spawn rate = 2/frame -> at 60Hz = 120 spawn/sec -> 50-actor zone = ~417ms ramp
+- Application main loop is FUN_004da680 (Win32 message loop entry)
+- PerFrameTick (FUN_00578970) dispatches 15+ subsystem ticks per frame
+- Spawn pipeline occupies subsystem slot[6] of PerFrameTick
+- Subsystem slot[10] = timeout monitor (900-frame / 15-sec threshold)
+- 32-bit packed input events at engine+0x17828 (3-bit tag + 4-bit subsys + 24-bit payload)
 ```
 
 ## 22. Speculative / Open Threads

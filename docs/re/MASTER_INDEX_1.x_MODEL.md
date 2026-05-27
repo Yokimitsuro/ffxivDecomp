@@ -2,15 +2,86 @@
 
 This document is the **executive summary** of the reverse-engineering
 work completed during the multi-session research effort. The 1.x
-client model is decomposed across **158 findings** (61 EXE + 85 Lua
-+ 12 correlation) covering: wire protocol, schemas, native binding
+client model is decomposed across **173+ findings** (75 EXE + 86 Lua
++ 13 correlation) covering: wire protocol, schemas, native binding
 APIs, gameplay subsystems, data correlations.
 
-Last updated: 2026-05-27 (session +20 commits).
+Last updated: 2026-05-28 (session +5 commits: class system + spawn pipeline + main loop CAPSTONE).
 
 **For fast lookups**, see `docs/re/QUICK_REFERENCE.md` (22 sections,
 lookup tables for all architectural facts). This index has the
 narrative; QUICK_REFERENCE has the tables.
+
+## Session 2026-05-28 Expansion (5 commits) -- CAPSTONE ROUND
+
+```text
+✓ DesktopWidget connector deep-dive (Lua) -- 26,564 lines, 255 methods, 13 subsystems
+  - 3rd async pattern documented: WIDGET YIELD
+    (complements ResumeChecker C++ + FunctionEndCallback C++)
+  - work-sync schema with ~30+ fields (commandIndex=18-slot hotbar)
+  - ~30+ UICommandCondition registrations (PartyTarget1-7, etc.)
+  - Universal ask() flow: openWidgetYield -> selectWidgetYield -> getAskResult
+
+✓ CLASS-SYSTEM THUNK FAMILY COMPLETE (4 thunks)
+  _defineClass            registers class into parent chain
+  _createActor            instantiates via vtable[0x6c]
+  _isInstanceOf           DUAL DISPATCH (7 RTTI fast-path + Lua chain walk)
+  _canCreateActorByName   creatability pre-check (3 non-createable tags)
+
+✓ _isInstanceOf semantics:
+  - 7 hardcoded fast-path C++ class names (ActorBase TRUE unconditional,
+    6 others via ___RTDynamicCast)
+  - ALL ___RTDynamicCast use LuaControl as SOURCE (proves invariant:
+    every Lua-passable instance derives from LuaControl)
+  - Dynamic fallback: walks parent chain at instance[+0xc]..[+0x54]
+    via LuaClass_resolveOrRegisterClassByName + chain walker
+
+✓ SPAWN PIPELINE 6-stage architecture mapped (T0-T5):
+  Spawn is NOT a wire opcode -- it's a TYPED PACKET OBJECT SYSTEM
+  via Group::PacketRequestBase polymorphic hierarchy
+
+  T0  perTickPump (busy flag +0xea prevents reentrancy)
+  T1  ringBufferConsumer (RTTI cast PacketRequestBase -> EntryBuilderBase)
+  T2  orchestrator (emits 2x 0x130 outbound = list lifecycle ACK)
+  T3  dispatch 2+N actorsList
+  T4  build + dispatchToAllocator (alloc 72B WorkRecord if needed)
+  T5  allocate actor 84B + invokeOnInit + send 0x133 ACK
+
+  Up to 2 actors per per-frame call -> at 60Hz = 120 spawn/sec ->
+  50-actor zone = ~417ms ramp (the visible "fade-in" at zone enter)
+
+✓ +2 NEW RTTI TYPES (NEW NAMESPACE Group::):
+  Application::Lua::Script::Client::Group::PacketRequestBase
+  Application::Lua::Script::Client::Group::EntryBuilderBase
+  Brings total to 15 RTTI types confirmed (was 9 at session start)
+
+✓ APPLICATION MAIN LOOP + PER-FRAME DISPATCH (CAPSTONE):
+  Application_mainTick_perFrame_eventLoopAndSubsystems @ 0x004da680
+    - Called from Win32 message loop
+    - 3 startup gates: +0x4a8 (startup), +0x17444 (system), +0x174dc (render)
+    - Processes 32-bit packed input events at +0x17828
+      (3-bit tag + 4-bit subsystem ID + 24-bit payload)
+    - Tag 0xc0 routes via DAT_01336b60 + subsys_id * 24 handler table
+
+  PerFrameTick_Subsystems_widgets_zone_spawn_etc @ 0x00578970
+    - Dispatches 15+ subsystem ticks per frame
+    - Slot[6] = SPAWN PIPELINE (perFrameWrapper -> T0)
+    - Slot[10] = TIMEOUT MONITOR (900-frame / 15-sec threshold)
+    - Slots [2-5] = 4 widget container ticks
+    - Slots [7-9], [11-12], [1+0x110], [1+0x114], [0xd] = unmapped
+
+✓ 11th ResumeChecker pinned: LpbLoader::ResumeChecker (~120B, engine-internal)
+
+✓ 17 RENAMES + 4 DECOMPILER COMMENTS applied in Ghidra (proactive
+  annotation per ghidra_annotations memory)
+
+NEXT ROUND TARGETS:
+  - Spawn wire-side: identify network I/O thread/fiber to find the
+    actual wire opcode that creates PacketRequestBase instances
+  - Walk subsystem slots [7-9], [11-12] (10+ subsystems unmapped)
+  - LinkshellCommand family
+  - charabaseclass_event.lua + charabaseclass_battle.lua deep-dives
+```
 
 ## Session 2026-05-27 Expansion (29+ commits) -- LATE STATE
 
@@ -156,10 +227,18 @@ Documented native bindings:     ~344 native _cpp + ~62 pure-Lua wrappers
                                    ~62 _lua-suffixed are pure-Lua wrappers
                                    that need no master registrar)
 Native master blocks located:    17 of 17 (100%); 409 registrar slots
-Disassembled C++ thunks:          6 (createActor, defineClass, wait,
-                                     getData, loadKey, updateWork)
-ResumeChecker subclasses:         3 confirmed (OnInit 16B, Wait 40B,
-                                     LoadData 148B) + 8 predicted
+Disassembled C++ thunks:         17+ (master primitives + 8 _wait* siblings
+                                      + 4 class-system thunks complete:
+                                      _defineClass, _createActor,
+                                      _isInstanceOf, _canCreateActorByName)
+ResumeChecker subclasses:        11 confirmed (was 10; +LpbLoader::ResumeChecker
+                                      engine-internal, ~120B)
+RTTI types confirmed:            15 (was 9; +PacketRequestBase + EntryBuilderBase
+                                      in NEW Group:: namespace)
+Spawn pipeline:                  6-stage drain side mapped (T0-T5);
+                                      wire/producer side NOT YET mapped
+Main loop architecture:          MAPPED (2-level: Application_mainTick
+                                      -> PerFrameTick -> 15+ subsystems)
 Documented wire opcodes:         9 outbound (0x12d-0x135) +
                                   ~224 inbound dispatch table
 Documented binding ids:          25+ catalogued (1xxx-5xxx, 100xxx-500xxx)
@@ -183,7 +262,7 @@ EXE-validated facts:             binding id == runtime field id (1:1)
                                   ResumeCheckerInterface = universal yield
                                   FunctionEndCallbackInterface = async I/O
 Gameplay subsystems documented:  ~16 major subsystems
-Coverage at architectural level: ~98% (was ~95%)
+Coverage at architectural level: ~99% (was ~98%)
 ```
 
 ## Documentation Map
