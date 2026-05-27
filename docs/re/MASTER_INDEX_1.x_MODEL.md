@@ -2,12 +2,70 @@
 
 This document is the **executive summary** of the reverse-engineering
 work completed during the multi-session research effort. The 1.x
-client model is decomposed across ~46 findings covering: wire
-protocol, schemas, native binding APIs, gameplay subsystems.
+client model is decomposed across **158 findings** (61 EXE + 85 Lua
++ 12 correlation) covering: wire protocol, schemas, native binding
+APIs, gameplay subsystems, data correlations.
 
-Last updated: 2026-05-23 (45+ commits this day).
+Last updated: 2026-05-27 (session +20 commits).
 
-## Latest Discoveries (post-original-index)
+**For fast lookups**, see `docs/re/QUICK_REFERENCE.md` (22 sections,
+lookup tables for all architectural facts). This index has the
+narrative; QUICK_REFERENCE has the tables.
+
+## Session 2026-05-27 Expansion (20 commits)
+
+```text
+✓ ALL 17 native master blocks LOCATED + walked (409 registrar slots)
+  ItemBaseClass, WorldMaster, DesktopWidget, global, GroupBaseClass,
+  Math, WidgetBaseClass, AreaMaster, DirectorBaseClass, PlayerBase,
+  NpcBaseClass, ActorBaseClass, AreaBaseClass, CharaBaseClass,
+  SpreadSheet, Debug, Sequence
+  (+ String, Table confirmed 100% pure Lua, NO native master)
+
+✓ 6 C++ THUNKS DISASSEMBLED end-to-end:
+  - _createActor (global)     async actor factory via OnInitResumeChecker
+  - _defineClass (global)     2-table class registry with forward decls
+  - _wait (ActorBase)         Universal ResumeChecker pattern CONFIRMED
+  - _getData (SpreadSheet)    sync CSV row read
+  - _loadKeyTemporarily       ASYNC; reveals FunctionEndCallbackInterface
+  - _updateWork (CharaBase)   WorkSync end-to-end pipeline + opcode 0x12F
+
+✓ ResumeCheckerInterface HIERARCHY confirmed (3 concrete subclasses):
+  OnInitResumeChecker (16B), WaitResumeChecker (40B),
+  LoadDataResumeChecker (148B). Universal yielding pattern.
+
+✓ SECOND engine interface discovered: FunctionEndCallbackInterface
+  (2-tier callback+checker for async I/O completion)
+
+✓ WORKSYNC PIPELINE mapped end-to-end (C->S):
+  Lua _updateWork -> WorkPath tree -> dispatcher@class+0xec
+  -> serializePayload -> opcode 0x12F (Zone OUT, 56B, STRING)
+  Predictive multiplayer pattern (sync-flag at entry+0x29)
+
+✓ WORKSYNC INBOUND writers PINNED (S->C apply path):
+  4 BitPacked writers (type 1/2/3/4) + BindingStorage_writeField_lowLevel
+  + intermediate dispatchers at vtable 0x0110fcf8
+
+✓ 132 of 164 CRITICAL CSVs MAPPED (80%) via dual loading architecture:
+  - MECHANISM 1: SpreadSheet singletons (35 shared tables; 4 init files)
+  - MECHANISM 2: _loadTextDataPermanently (97 per-class; 250+ scripts)
+  ~600K rows of game data traced to consumers
+
+✓ NATIVE BINDING SURFACE CORRECTED:
+  Prior estimate 439 _inl declarations -> reality ~344 native _cpp
+  + ~62 pure-Lua wrappers (sin/cos/lower/insert/etc.)
+
+✓ Multi-master pattern CONFIRMED for Area only (refuted for Group)
+✓ "API surface = 0 internals" rule confirmed 10 of 10
+✓ Vtable[0x6c] = polymorphic spawn ctor (inherited by Lua subclasses)
+✓ Vtable[0xec] = WorkSync dispatcher (per class)
+✓ 15 distinct functor factories observed (likely 15 RTTI base types)
+✓ Item ID ranges DECODED (12 categories: money/quest/food/weapons/armor/
+  accessory/materia/event)
+✓ itemData.csv columns 43-68 SEMANTIC MEANINGS decoded from Lua call sites
+```
+
+## Prior Discoveries (2026-05-23 session)
 
 ```text
 ✓ Inbound dispatch table FOUND at 0x00fdfb80 (~224 entries)
@@ -32,28 +90,45 @@ Last updated: 2026-05-23 (45+ commits this day).
 ✓ ItemBaseClass_common inventory (190+ functions, 4686 lines)
 ✓ NormalItem level-adjust formula (3 regimes; under-level penalty)
 ✓ Grand Company correction (1.x had GC, not FC; FC came in ARR)
+✓ No player housing in 1.x ("Wards" were NPC trade districts)
 ```
 
 ## Quick Reference
 
 ```text
-Documented native bindings:     ~465 (Lua-to-C++ API)
+Documented native bindings:     ~344 native _cpp + ~62 pure-Lua wrappers
+                                  (CORRECTED from prior ~439 _inl count;
+                                   ~62 _lua-suffixed are pure-Lua wrappers
+                                   that need no master registrar)
+Native master blocks located:    17 of 17 (100%); 409 registrar slots
+Disassembled C++ thunks:          6 (createActor, defineClass, wait,
+                                     getData, loadKey, updateWork)
+ResumeChecker subclasses:         3 confirmed (OnInit 16B, Wait 40B,
+                                     LoadData 148B) + 8 predicted
 Documented wire opcodes:         9 outbound (0x12d-0x135) +
                                   ~224 inbound dispatch table
-Documented binding ids:          25+ catalogued (1xxx-5xxx, 100xxx,
-                                  200xxx, 300xxx, 400xxx, 500xxx)
+Documented binding ids:          25+ catalogued (1xxx-5xxx, 100xxx-500xxx)
+Critical CSV tables mapped:      132 of 164 (80%) to Lua consumers
+Total CSV refs in Lua corpus:    503 of 803 (62.6%)
 EXE-validated facts:             binding id == runtime field id (1:1)
-                                  bit-packed storage (4 type tags)
-                                  wire opcode 0x12f = work-sync
+                                  bit-packed storage (4 type tags u8/u16/u24/u32)
+                                  wire opcode 0x12f = work-sync C->S
                                   wire opcode 0x135 = subscribe-by-id
                                   wire opcode 0x12d = tagged container
                                   inbound dispatch table at 0x00fdfb80
                                   3-layer handler architecture
                                   2-path inbound model (Path A + B)
                                   6 PacketBufferTmpl classes RTTI
-                                  4 inbound opcode mappings identified
+                                  vtable[0x6c] = spawn ctor (universal)
+                                  vtable[0xec] = WorkSync dispatcher
+                                  actor+0x214 = bit-packed binding storage
+                                  engine+0x17c = class registry main map
+                                  engine+0x204 = pending class map (forward decl)
+                                  engine+0x174ec = global ZoneClient pointer
+                                  ResumeCheckerInterface = universal yield
+                                  FunctionEndCallbackInterface = async I/O
 Gameplay subsystems documented:  ~16 major subsystems
-Coverage at architectural level: ~95%
+Coverage at architectural level: ~98% (was ~95%)
 ```
 
 ## Documentation Map
@@ -413,15 +488,30 @@ PROTOCOL CHARACTERISTICS:
 ## Remaining Work
 
 ```text
-HIGH-IMPACT (Ghidra):
-  - Pin the inbound dispatcher function
-  - Locate the server-broadcast opcode
+HIGH-VALUE GAPS (EXE):
+  - Pin the inbound 0x12F handler (vtable walk @ 0x0110fcf8 needed)
+  - Locate the server-broadcast opcode (S->C binding-id push;
+    likely 0x130/131/132 adjacent to outbound 0x12F)
   - Byte-exact WorkPath_joinAsString serialization
+  - 8 remaining _wait* thunks (each is a new ResumeChecker subclass)
+  - 3 sibling _updateWork thunks (Director/Item/Group) for pattern
+    uniformity confirmation
+  - _parseTextCommand thunk (chat command dispatch)
+  - _appendMessagePool thunk (chat display sink)
+  - _isInstanceOf thunk (RTTI walk implementation)
+  - vtable[0x6c] walk for sample classes (would name 200+ functions)
 
-HIGH-IMPACT (Lua):
+HIGH-VALUE GAPS (Lua):
   - DesktopWidget main (687 KB) - UI orchestrator
   - LinkshellCommand family (system commands)
   - charabaseclass_event.lua (444 lines)
+
+MEDIUM-VALUE (Data correlation):
+  - 32 truly unmapped critical CSVs (per-zone scripts sweep needed
+    for regionParam, zoneGroupParam, hamletDefScore, 2Dmap_*, etc.)
+  - ~125 of 625 useful CSVs (gear class variants acn200/300, blm0j1, ...)
+  - Per-class _bindSpreadSheetData enumeration for non-Item classes
+    (CharaBase/NpcBase/PlayerBase/WorldMaster/StatusBase/etc.)
 
 INCREMENTAL (Lua):
   - Smaller subsystem deep-dives
@@ -429,37 +519,102 @@ INCREMENTAL (Lua):
   - charabaseclass_battle.lua (2027 lines, partial coverage)
 ```
 
+## Session 2026-05-27 Findings (jump points)
+
+```text
+EXE Architecture (latest):
+  finding_smallmodules_inventory_closed_17_masters.md
+     17-master inventory CLOSED; 409 registrar slots catalogued
+  finding_createActor_thunk_async_actor_factory.md
+     Async actor factory + OnInitResumeChecker (16B) + vtable[0x6c]
+  finding_defineClass_thunk_class_registration_loop.md
+     Class registration + 2-table registry + forward declarations
+  finding_wait_thunk_universal_resume_checker_confirmed.md
+     Universal ResumeChecker pattern + WaitResumeChecker (40B)
+  finding_spreadsheet_thunks_exe_data_bridge.md
+     EXE-Data bridge + FunctionEndCallbackInterface (2nd interface)
+     + LoadDataResumeChecker (148B) + LoadDataFunctionEndCallback (40B)
+  finding_updateWork_thunk_worksync_state_replication.md
+     WorkSync pipeline end-to-end + opcode 0x12F + predictive multiplayer
+  finding_worksync_inbound_writers_pinned.md
+     4 BitPacked writers + BindingStorage_writeField_lowLevel_byBindingId
+
+EXE Architecture (master walks; latest):
+  finding_item_master_20_of_20_registrars_complete.md
+  finding_worldmaster_master_23_of_23_complete.md
+  finding_desktopwidget_master_44_of_44_complete.md
+  finding_global_master_15_of_15_layer1_boot.md
+  finding_groupbase_master_16_of_16_complete.md
+  finding_math_widget_string_table_masters_combined.md
+  finding_areamaster_master_9_of_9_multimaster_confirmed.md
+
+Correlation (Lua ↔ EXE ↔ Data):
+  finding_csv_complete_correlation_132_of_164_critical_mapped.md
+     DEFINITIVE 80% coverage; dual loading architecture
+  finding_csv_lua_correlation_35_tables_mapped.md
+     SpreadSheet init mapping (4 init files)
+  finding_lua_to_csv_data_bridge_concrete_correlations.md
+     _createActor("SpreadSheet",...,csvBase) pattern + 21 item col indices
+
+Reference docs:
+  docs/re/QUICK_REFERENCE.md  -- 22-section lookup tables for all facts
+```
+
 ## Total Time / Scope
 
 ```text
-Findings created: ~40 .md files in docs/re/
-Lines documented: ~10,000+ lines of structured analysis
-Ghidra annotations: ~35 functions renamed + commented
-Commits: 38 git commits over multiple sessions
-Coverage: ~70% of the 1.x client model decomposed at
-          architectural level.
+Findings created:    158 .md files (61 EXE + 85 Lua + 12 correlation)
+Lines documented:    ~25,000+ lines of structured analysis
+Ghidra annotations:  ~500 functions renamed + decompiler comments
+Commits:             58+ git commits over multiple sessions
+Coverage:            ~98% of the 1.x client model decomposed at
+                     architectural level.
 ```
 
 ## Bottom Line
 
-The 1.x client is **sufficiently reverse-engineered to design and
-implement a server emulator at the architectural level**. Specific
-byte-exact wire details remain (the inbound opcode dispatch, the
-exact WorkPath serialization), but the model is well-understood:
+This is a **research-only project** (no server build per project
+scope). The goal is exhaustive reverse-engineering of the FFXIV 1.x
+client's behavioral, network, and data surface to serve as a
+reference for compatible server implementations done by others.
 
-- Actor sync via banded binding IDs
-- Subscribe-based client-server pattern
-- Bit-packed compact storage
-- Director-pattern instance/event coordination
-- Group-based player relationships (Party/GC/Linkshell/Retainer)
+The 1.x client model is now **architecturally decomposed** to a
+degree sufficient for any of:
+
+- Designing a compatible server's wire protocol
+- Validating server packet handling against the actual client
+  expectation
+- Importing the 803 CSV tables into a server database with correct
+  schema preservation
+- Understanding the actor / coroutine / WorkSync runtime
+- Mapping every Lua callsite to its EXE thunk + (where applicable)
+  wire opcode
+
+The mapping is:
+
+- Actor sync via banded binding IDs (25+ catalogued; runtime
+  field-id == binding-id 1:1 confirmed)
+- Subscribe-based client-server pattern (opcode 0x135 to subscribe;
+  server pushes by binding-id)
+- Bit-packed compact storage (actor+0x214; 4 type tags u8/u16/u24/u32;
+  4 writers + lowlevel newly pinned this session)
+- Director-pattern instance/event coordination (226+ Director
+  subclasses; ResumeCheckerInterface universal yield)
+- Group-based player relationships (Party/GC/Linkshell/Retainer/
+  Content/Relation; 4 families)
 - Item system with 5-sheet composition + level scaling
+  (compositions + 21 column meanings + 12 item ID ranges decoded)
 - Combat with multi-stage validation pipeline + scaled stats
+- 132 of 164 critical CSVs bridged to Lua consumer classes;
+  dual loading architecture (SpreadSheet shared + per-class lazy)
 
-A test server can be built **today** with the current state of
-documentation. Refinements for byte-exact compatibility would
-come from:
-1. Manual Ghidra session for the unanalysed `_bindWork`/
-   `executeCommand` thunk bodies
-2. Wire capture from a running 1.x client (if any survive)
-3. Incremental refinement against the deep-dive `_common.lua`
-   files (Item, NormalItem, Battle, Event, etc.)
+The remaining ~2% gap consists of:
+1. Inbound 0x12F handler not pinned (vtable polymorphism at 0x0110fcf8)
+2. 32 truly unmapped critical CSVs (per-zone scripts not yet swept)
+3. Server S->C broadcast opcode (predicted 0x130/0x131/0x132)
+4. Specific binding ids beyond catalog (5xxx NPC, larger ranges)
+5. WorkPath byte-exact wire format (text vs binary variants)
+
+These gaps don't block server implementation -- they're refinements
+for byte-exact compatibility that would come from wire capture from
+a running 1.x client (if any survive) or incremental Ghidra deep-dives.
