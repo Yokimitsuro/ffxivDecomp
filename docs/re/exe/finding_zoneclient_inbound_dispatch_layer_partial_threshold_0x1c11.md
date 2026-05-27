@@ -246,8 +246,112 @@ Speculative:
    types it returns
 ```
 
+## 10. ADDENDUM: Second-pass investigation findings
+
+After the first partial trace, attempted a second pass via different
+vectors. Findings:
+
+### A. Opcode 0x130 is EXCLUSIVELY tied to spawn pipeline
+
+Both outbound 0x130 senders (`Lua_listObjectQueueAdd_sends_0x130_variantA`
+@ 0x006dae90 and `Lua_listObjectDelete_sends_0x130_variantA` @ 0x006dacd0)
+have **EXACTLY ONE caller each**: SpawnPipeline_T2 (0x006cda25 + 0x006cda40).
+
+```text
+This proves: opcode 0x130 is ONLY used for spawn list lifecycle ACKs.
+No other client subsystem sends 0x130. The opcode is dedicated to
+the spawn pipeline's "listObjectQueueAdd + Delete" pattern.
+
+Server-side implication: receiving 0x130 from client is unambiguous --
+ALWAYS a spawn ACK (queueAdd = "I added this actor", delete = "I
+processed this pending entry").
+```
+
+### B. 0x130 packet body decoded (32B = 8B header + 16B payload + 8B framing)
+
+```text
+ZoneOut_send_opcode_0x130_32B_variantA body:
+  +0x00  uint32  opcode = 0x130 (HARDCODED)
+  +0x04  uint32  size = 0x20 = 32 (HARDCODED)
+  +0x08  uint32  param_1 deref (likely: listObjectId / actorId)
+  +0x0c  uint32  param_2 deref (likely: classId / entryId)
+  +0x10  uint32  0 (reserved)
+  +0x14  uint32  0 (reserved)
+  +0x18-+0x1f    framing/padding
+
+So the spawn ACK payload is just 2 uint32 values. This means the
+server can correlate the ACK to the original push by matching these
+2 IDs against its outstanding-spawn table.
+```
+
+### C. runCharaScheduler is NOT the spawn entry point
+
+`CharaBaseClass_registerLua_runCharaScheduler` binds the Lua API
+`_runCharaScheduler`. Tracing the thunk reveals it dispatches to
+`ChunkRegistry_LookupAt_4AC` + `FUN_0058caf0` -- this is for running
+SCHEDULER scripts (NPC AI behavior loops) on EXISTING actors, not
+for spawning.
+
+**The actual spawn trigger comes from the wire side, not from Lua.**
+For NPCs spawned at zone load, the engine likely uses local zone data
++ a separate spawn path. For SERVER-PUSHED actors (other players,
+dynamic NPCs), the trigger arrives via wire and routes into the
+spawn pipeline ring buffer.
+
+### D. FUN_006cde30 is the spawn pipeline's "string-matched notification" handler
+
+Discovered via xref walk: T1 has 2 callers -- T0 AND FUN_006cde30.
+FUN_006cde30 is a callback that:
+1. Compares param_1 against `this+0x40` and `this+0x94` string fields
+2. If match: marks +0xe8 or +0xe9 ready flag
+3. If BOTH flags ready: clears busy flag +0xea and calls T1
+
+This is the **PER-ENTRY READY NOTIFICATION**. Two pending entries
+(at +0x40 and +0x94) get marked ready when their resolution
+completes. Then T1 fires to consume them.
+
+The single xref to FUN_006cde30 is from **DATA at 0x00fd42f8**
+(vtable slot). Meaning FUN_006cde30 is a VIRTUAL METHOD of the
+spawn pipeline class. Whoever resolves names polymorphically calls
+this via the vtable.
+
+### E. Why the trace plateaus here
+
+```text
+The remaining piece (network thread -> PacketRequestBase construction
+-> ring buffer push) requires SEARCH BY RTTI REFERENCE, which Ghidra
+MCP doesn't expose directly. Options to push further would need:
+
+1. Manual Ghidra session to find Group::PacketRequestBase ctor by
+   navigating to the RTTI type descriptor symbol and walking its
+   vftable entries
+2. A search by .rdata constant value (the address of the
+   Group::PacketRequestBase RTTI_Type_Descriptor) to find all
+   construction sites
+3. A search across function bodies for the byte pattern that
+   constructs typed packets via factory dispatch
+
+For now, the spawn pipeline is FULLY MAPPED on the consumer side
+(6 stages, T0->T5) and the OUTBOUND ACK side (opcode 0x130, 32B).
+The PRODUCER side requires deeper Ghidra navigation than the MCP
+tools support efficiently.
+```
+
+### F. Updated state of spawn wire-side trace
+
+```text
+CLOSED (DRAIN SIDE):  consumer pipeline T0->T5, ring buffer at
+                       instance+0x20, OUTBOUND 0x130 ACK pair,
+                       OUTBOUND 0x133 init ACK
+PARTIALLY OPEN:       0x1c11 sequence threshold (boundary between
+                       in-order processing and discard)
+OPEN (PRODUCER SIDE): wire opcode that triggers spawn (still TBD),
+                       PacketRequestBase factory location, ring
+                       buffer push site, network thread/fiber entry
+```
+
 ## Commit suggestion
 
 ```
-docs(re/exe): PARTIAL spawn wire-side trace -- ZoneClient inbound dispatch + 0x1c11 sequence threshold + 2 NEW Network RTTI types (17 total)
+docs(re/exe): PARTIAL spawn wire-side trace -- ZoneClient inbound dispatch + 0x1c11 sequence threshold + 2 NEW Network RTTI types (17 total) [+addendum: opcode 0x130 exclusive to spawn ACKs, packet decoded, vtable callback identified]
 ```
