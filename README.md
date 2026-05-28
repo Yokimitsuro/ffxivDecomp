@@ -17,6 +17,7 @@ dumps, DRM/auth bypasses, or live-service abuse tooling.
 |----------|-----------|
 | [`docs/re/MASTER_INDEX_1.x_MODEL.md`](docs/re/MASTER_INDEX_1.x_MODEL.md) | Executive summary + session narrative + documentation map |
 | [`docs/re/QUICK_REFERENCE.md`](docs/re/QUICK_REFERENCE.md) | Single-page lookup tables for every architectural fact |
+| [`docs/re/ghidra_symbol_map.md`](docs/re/ghidra_symbol_map.md) | ~360 named functions (address -> name) + re-import script for a fresh Ghidra analysis of the same binary |
 
 The MASTER_INDEX has the narrative; the QUICK_REFERENCE has the tables.
 

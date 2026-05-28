@@ -1,0 +1,496 @@
+# Ghidra Symbol Map -- FFXIV 1.23b client (`2012.09.19.0001`)
+
+Re-importable export of the function names assigned during this
+research. Each line is `address  name` where the address is the
+absolute virtual address as loaded by Ghidra's default image base for
+this binary (`ffxiv.exe`, the 1.23b client). Applying these names to a
+fresh analysis of the **same** binary reproduces the project's analysis
+state -- ~360 named functions distilled from the documented renames.
+
+This is OUR annotation work (names we authored), **not** decompiled
+proprietary source. No code bytes are reproduced here.
+
+## How to re-import (Ghidra script)
+
+Paste into a Ghidra Python (Jython) script (`Window -> Script Manager
+-> New`) with this program open, then paste the `address name` pairs
+from the sections below into `PAIRS`:
+
+```python
+# applies "address name" lines to the current program
+fm = currentProgram.getFunctionManager()
+st = currentProgram.getSymbolTable()
+af = currentProgram.getAddressFactory()
+PAIRS = """
+006cc070 SpawnPipeline_FACTORY_dispatchByTypeTag_enqueueToRingBuffer
+# ... paste pairs here ...
+"""
+for line in PAIRS.strip().splitlines():
+    line = line.strip()
+    if not line or line.startswith("#"):
+        continue
+    addr_s, name = line.split(None, 1)
+    addr = af.getAddress(addr_s)
+    fn = fm.getFunctionAt(addr)
+    if fn is not None:
+        fn.setName(name, ghidra.program.model.symbol.SourceType.USER_DEFINED)
+    else:
+        st.createLabel(addr, name, ghidra.program.model.symbol.SourceType.USER_DEFINED)
+print("done")
+```
+
+(For a full-fidelity native dump including comments + data types, use
+Ghidra `File -> Export Program -> Ghidra XML`, or run the stock
+`ExportSymbolInfoScript` -- those capture more than this names-only map.)
+
+---
+
+## Application loop + per-frame subsystems
+
+```text
+004da680  Application_mainTick_perFrame_eventLoopAndSubsystems
+004d6d30  Application_dispatchToZoneClient
+0075d120  PerFrameSubsystem_slot1_0x110_PLAYER_MODE_TICKER_3bindings
+00764fd0  PerFrameSubsystem_slot1_0x114_WIDGET_CONTAINER_CHILD_NOTIFIER
+00766f00  PerFrameSubsystem_slot2_widgetLifecyclePump_stateMachine
+0076f6f0  PerFrameSubsystem_slot3_widgetAnimationStateTick
+007700b0  PerFrameSubsystem_slot4_widgetLoadManager_msg0xde
+0076a9c0  PerFrameSubsystem_slot5_spreadsheetCSVPreloader_4categories
+00583440  PerFrameSubsystem_slot7_INBOUND_WORKSYNC_PUMP_complex_32pertick
+005836d0  PerFrameSubsystem_slot8_INBOUND_WORKSYNC_PUMP_simple_32pertick
+00770c00  PerFrameSubsystem_slot10_timeoutMonitor_900frames_15sec
+0076dab0  PerFrameSubsystem_slot11_compound_widget_tick_2subdispatchers
+00765340  PerFrameSubsystem_slot12_DEAD_SESSION_CLEANUP_TICK
+```
+
+## Zone inbound -- main dispatcher + game opcodes 0x143-0x1a3
+
+```text
+004dc690  Zone_MAIN_inbound_opcode_dispatcher_50plus_handlers
+00576240  ZoneIn_opcode_0x143_DESPAWN_extractAndForwardToDespawnHandler
+005764c0  ZoneIn_opcode_0x146_ACTOR_EVENT_with_context_lookup
+00576560  ZoneIn_opcode_0x148_actorLookup_thenDispatch_subsystem_0x24
+005763c0  ZoneIn_opcode_0x16d_ACTOR_EVENT_byte_payload
+00576430  ZoneIn_opcode_0x16e_ACTOR_EVENT_with_context_lookup
+00576bf0  ZoneIn_opcode_0x176_ACTOR_EVENT_simple_payload
+005763b0  ZoneIn_opcode_0x17a_STATE_EVENT_uint_to_subsystem_0x18
+00576250  ZoneIn_opcode_0x17c_SPAWN_extractAndForwardToFactory
+005762c0  ZoneIn_opcode_0x17d_thinBridge_with8B_to_subsystem_0x18
+005762d0  ZoneIn_opcode_0x17e_STATE_EVENT_uint32_session_gated
+005762e0  ZoneIn_opcode_0x17f_STATE_EVENT_uint64_session_gated_typeA
+005762f0  ZoneIn_opcode_0x180_STATE_EVENT_uint64_session_gated_typeB
+00576300  ZoneIn_opcode_0x181_STATE_EVENT_uint64_session_gated_typeC
+00576310  ZoneIn_opcode_0x182_STATE_EVENT_uint64_session_gated_typeD
+00576320  ZoneIn_opcode_0x183_STATE_EVENT_uint_to_subsystem_0x18_variantA
+00576330  ZoneIn_opcode_0x184_STATE_EVENT_uint_to_subsystem_0x18_variantB
+00576340  ZoneIn_opcode_0x185_STATE_EVENT_uint_to_subsystem_0x18_variantC
+00576350  ZoneIn_opcode_0x186_MULTI_ACTOR_STATE_SET_12Bperrecord
+00576390  ZoneIn_opcode_0x187_WORKSYNC_typedPacket_extractForwarder
+00576360  ZoneIn_opcode_0x188_LINKSHELL_ENTRY_single_to_factory
+00576370  ZoneIn_opcode_0x189_LINKSHELL_ENTRY_BATCH_to_factory
+00576380  ZoneIn_opcode_0x18a_BULK_PAIR_SET_8Bperentry_countAt_0x60
+005763a0  ZoneIn_opcode_0x18b_MEMBERINFO_typedPacket_extractForwarder
+00575550  ZoneIn_opcode_0x18d_sessionGated_bufferOrDirect_dispatch
+00576c60  ZoneIn_opcode_0x18f_ACTOR_TRIGGER_no_payload
+00576cd0  ZoneIn_opcode_0x190_ACTOR_EVENT_with_payload
+00576d40  ZoneIn_opcode_0x191_ACTOR_PING_lookupDispatchNoPayload
+00578c90  ZoneIn_opcode_0x193_SYSTEM_ERROR_dispatcher_22codes_with_localized_strings
+00576050  ZoneIn_opcode_0x196_MULTI_FIELD_BIT_PACKED_8flags_8ushorts
+00576150  ZoneIn_opcode_0x198_STRING_UPDATE_pushToSubsystem_0xc
+00576140  ZoneIn_opcode_0x1a3_UI_MSGPOOL_push_uint
+```
+
+## Zone inbound -- sub-opcode table handlers (entries 4-59)
+
+```text
+0075d750  ZoneIn_handler_opcode_4_DesktopWidget_onTargetChanged
+0075d780  ZoneIn_handler_opcode_5_DesktopWidget_onTargetDecided
+0075d7b0  ZoneIn_handler_opcode_6_GetCurrentTarget_query
+0075d830  ZoneIn_handler_opcode_7_CutScene_onInitializationClip_Preview
+0075d860  ZoneIn_handler_opcode_8_CutScene_onInitializationClip
+0075d890  ZoneIn_handler_opcode_9_CutScene_onShowUIClip
+0075d8d0  ZoneIn_handler_opcode_10_CutScene_onHideUIClip
+00759940  ZoneIn_handler_opcode_11_CutScene_onShowWidgetClip
+007599e0  ZoneIn_handler_opcode_12_CutScene_onHideWidgetClip
+0075d900  ZoneIn_handler_opcode_13_CutScene_onOpenUIClip
+0075d950  ZoneIn_handler_opcode_14_CutScene_setActiveAndFinalize
+00759a50  ZoneIn_handler_opcode_15_NOP
+00759a60  ZoneIn_handler_opcode_16_Debug_scriptExec
+00759ad0  ZoneIn_handler_opcode_17_onPreCutSceneCancel
+00759b40  ZoneIn_handler_opcode_18_onPostCutSceneCancel
+00759bb0  ZoneIn_handler_opcode_20_DesktopWidget_onPreWarp
+00759c20  ZoneIn_handler_opcode_21_DesktopWidget_onPostWarp
+00759d20  ZoneIn_handler_opcode_27_SetEventStatusReceiver
+00759de0  ZoneIn_handler_opcode_28_NOP
+00759df0  ZoneIn_handler_opcode_29_NOP
+00759e00  ZoneIn_handler_opcode_30_NOP
+00759e10  ZoneIn_handler_opcode_31_NOP
+00759e20  ZoneIn_handler_opcode_32_NOP
+00759e30  ZoneIn_handler_opcode_33_NOP
+00759e40  ZoneIn_handler_opcode_34_NOP
+0076c0d0  ZoneIn_handler_chat_say_substitution_entry35
+0076c220  ZoneIn_handler_chat_variant_C_tell
+0076c3b0  ZoneIn_handler_chat_simple_entry37
+0076c690  ZoneIn_handler_chat_variant_D
+00759e50  ZoneIn_handler_dataPacket_calls_onReceiveDataPacket
+00759ed0  ZoneIn_handler_opcode_39_internal_map_insert
+00759f50  ZoneIn_handler_opcode_40_timed_or_immediate_exec
+0075a060  ZoneIn_handler_opcode_43_CharaBase_onChangeSystemFlag
+0075a0e0  ZoneIn_handler_opcode_44_MyPlayer_onReceiveLimitAddicted
+0075a160  ZoneIn_handler_opcode_45_HateStatusReceiver
+0075a200  ZoneIn_handler_opcode_46_ChocoboReceiver
+0075a280  ZoneIn_handler_opcode_47_ChocoboGradeReceiver
+0075a300  ZoneIn_handler_opcode_48_GoobbueReceiver
+0075a380  ZoneIn_handler_opcode_49_VehicleGradeReceiver
+0075a400  ZoneIn_handler_opcode_50_GrandCompanyReceiver
+0075a490  ZoneIn_handler_opcode_51_NOP
+0075a4a0  ZoneIn_handler_opcode_52_NOP
+0075a4b0  ZoneIn_handler_opcode_53_AchievementPointReceiver
+0075a530  ZoneIn_handler_opcode_54_AchievementTitleReceiver
+0075a5b0  ZoneIn_handler_opcode_55_AchievementIdReceiver
+0075a630  ZoneIn_handler_opcode_56_AchievementAchievedCountReceiver
+0075a6b0  ZoneIn_handler_opcode_58_JobChangeReceiver
+0075a730  ZoneIn_handler_opcode_59_EntrustItemReceiver
+005c5c80  ZoneIn_handler_default_noop
+```
+
+## Inbound state Receivers (apply server state to actors)
+
+```text
+0089c700  AchievementAchievedCountReceiver_construct
+0089c7c0  AchievementAchievedCountReceiver_applyToMyPlayer
+0089c620  AchievementIdReceiver_construct
+0089c6d0  AchievementIdReceiver_applyToMyPlayer
+0089c460  AchievementPointReceiver_construct
+0089c510  AchievementPointReceiver_applyToMyPlayer
+0089c540  AchievementTitleReceiver_construct
+0089c5f0  AchievementTitleReceiver_applyToPlayerBase_field_0xe8
+008a2f70  ChocoboGradeReceiver_construct
+008a3020  ChocoboGradeReceiver_applyToMyPlayer
+008a2e70  ChocoboReceiver_construct
+008a2f30  ChocoboReceiver_applyToMyPlayer
+0089f110  EntrustItemReceiver_construct_32byte_struct
+0089cb90  EntrustItemReceiver_applyToMyPlayer
+008a3050  GoobbueReceiver_construct
+008a3100  GoobbueReceiver_applyToMyPlayer
+0089cc90  GrandCompanyReceiver_construct
+0089cd60  GrandCompanyReceiver_applyToPlayerBase_polymorphic
+0089cf60  HateStatusReceiver_construct
+0089d030  HateStatusReceiver_applyToNpcBase
+0089cab0  JobChangeReceiver_construct
+0089cb60  JobChangeReceiver_applyToPlayerBase
+0089d770  SetEventStatusReceiver_construct
+0089d860  SetEventStatusReceiver_applyToNpcBase
+008a3130  VehicleGradeReceiver_construct
+008a31e0  VehicleGradeReceiver_applyToMyPlayer
+0089fbf0  UserDataReceiver_dispatchByTargetMode
+008a1510  UserDataReceiver_extractActorId
+008a15b0  UserDataReceiver_extractActorName
+008a0190  UserDataReceiver_invokeLua_onReceiveDataPacket
+008a0370  UserDataReceiver_invokeLua_onReceiveTimingPacket
+008a2d50  UserDataReceiver_vtable_slot22_appendPayloadToContainer
+008a2b70  UserDataReceiver_vtable_slot23_resolveActorIntoField0x18
+00776340  UserDataReceiver_vtable_noop_inherited
+```
+
+## Zone outbound -- opcodes 0x12d-0x135
+
+```text
+0076e270  ZoneOut_sendScriptError_opcode_0x12d
+0075e3a0  ZoneOut_send_large_checksummed_v1
+0075e510  ZoneOut_send_large_checksummed_v2
+0075e230  ZoneOut_send_large_checksummed_v3
+0075e1c0  ZoneOut_send_large_simple
+0075e670  ZoneOut_send_opcode_0x12e_104B
+0075e860  ZoneOut_send_opcode_0x130_32B_variantA
+0075e8d0  ZoneOut_send_opcode_0x130_32B_variantB
+0075ea50  ZoneOut_send_opcode_0x131_24B_byte
+0075eac0  ZoneOut_send_opcode_0x132_24B_byteUshort
+0075e950  ZoneOut_send_opcode_0x133_56B
+0075eba0  ZoneOut_send_opcode_0x134_40B_withNonce
+0075ecd0  ZoneOut_send_opcode_0x135_24B_dword
+0075e770  WorkSync_buildAndSendPacket_opcode_0x12f
+00776760  PacketBuilder_opcode_0x12d_200B_tagged
+```
+
+## Spawn / Despawn pipeline (typed-packet ring buffer, T0-T5)
+
+```text
+006cc620  SpawnPipeline_dispatcher_check2711tag_routeToFactory
+006cc070  SpawnPipeline_FACTORY_dispatchByTypeTag_enqueueToRingBuffer
+006cc5b0  SpawnPipeline_helper_copyPacket120B_setDiscriminator
+006c5f40  SpawnPipeline_outerRing_packetTypeDispatcher_with2711tag
+006cdf20  SpawnPipeline_perFrameWrapper_dispatchesT0
+006cdd20  SpawnPipeline_T0_perTickPump_processQueue
+006cda80  SpawnPipeline_T1_ringBufferConsumer_castEntryBuilderBase
+006cd8e0  SpawnPipeline_T2_orchestrate_listObject_emits_0x130_pair
+006db9a0  SpawnPipeline_T3_dispatch2plusN_actorsList
+006cbc90  SpawnPipeline_T4_buildAndDispatchToAllocator
+006c8cf0  SpawnPipeline_T5_allocateActor_84B_invokeOnInit_ackVia_0x133
+006c5020  DespawnPipeline_scanPendingList_conditionalBreakup
+006c5150  DespawnPipeline_constructBreakupBuilder_enqueueToRingBuffer
+006c5de0  DespawnPipeline_forwarder_toBreakupConstructor
+007238b0  ringBuffer_enqueue_4bytes
+```
+
+## Group:: typed packets (8 subclasses -- builders / updaters / factories)
+
+```text
+006cbfb0  EntryLinkShellBuilder_ctor_setsVftable_allocates0xf8Child
+006cb860  EntryLinkShellBuilder_dtor_revertsToParentVftable
+006cc390  EntryLinkShellBuilder_FACTORY_constructAndEnqueue
+006c5240  MemberInfoUpdater_FACTORY_constructAndEnqueue
+006c5df0  MemberInfoUpdater_forwarder_toFactory
+006c5750  PropertyUpdater_FACTORY_constructAndEnqueue_vtableCallback
+006c6b20  WorkSyncUpdater_FACTORY_constructAndEnqueue
+006c8340  WorkSyncUpdater_forwarder_toFactory
+006c72e0  WorkSyncAlt_serializePayloadAndSend_opcode_0x133
+```
+
+## WorkSync pipeline (C<->S state replication)
+
+```text
+00767fc0  WorkSync_dispatchOrEnqueue
+00767c00  WorkSync_serializePayloadAndSend
+0070aa10  WorkPath_construct_base
+0070aaa0  WorkPath_construct_withFields
+006cea20  WorkPath_joinAsString
+0071d420  WorkPathTree_lowerBound
+0076b950  ActorMessageQueue_lookupOrCreate_perActorId_WorkPathTree
+00d11c70  BitPacked_readByte_type1
+00d11cf0  BitPacked_readShort_type2
+00d11db0  BitPacked_readUint24_type3
+00d11e50  BitPacked_readUint32_type4
+00d11d30  BitPacked_writeByte_type1
+00d11e90  BitPacked_writeShort_type2
+00d11fd0  BitPacked_writeUint24_type3
+00d12080  BitPacked_writeUint32_type4
+00ce5290  BindingStorage_readField_dispatchByType
+00ce4550  BindingStorage_readField_lowLevel
+00ce45d0  BindingStorage_writeField_lowLevel
+00ce44d0  BindingStorage_writeField_lowLevel_byBindingId
+00cc7b90  Actor_readBindingUInt
+00cc7be0  Actor_readBindingBool
+00cc7de0  Actor_readBindingFloat
+00705eb0  Lua_queryBinding_dispatchType_sends_0x135
+0076b3d0  CommandUpdater_allocAndEnqueueRecord
+006e8360  CommandUpdater_dispatchByTargetType
+00773d90  CommandUpdater_invokeLua_onUpdateWork_clipObj
+00773f10  CommandUpdater_invokeLua_onUpdateWork_complex
+007721b0  CommandUpdater_send_toActorId
+00772560  CommandUpdater_send_toActorName
+00771f50  CommandUpdater_send_toCharaBase
+00772050  CommandUpdater_send_toCharaBase_WMSelf
+00772650  CommandUpdater_send_broadcast
+```
+
+## Command / chat / notice outbound + CRC32
+
+```text
+0070a010  MyPlayer_executeCommand_impl_vtable0xa8_validateTargets
+006de650  PlayerBase_executeCommand_thunk_jmp_vtable_0xa8
+00898480  Command_dispatch_immediateVsQueued_byVtable0x1c
+00897310  Command_immediate_sendVia_0x12d_checksummed_v1v2
+00896510  Command_queued_enqueueRecord_to_list_0x14
+00708fc0  Command_invokeLua_onCommand_5strDispatch
+006e8b30  MyPlayer_callServerOnCommand_impl_vtable0xb4_send_suspend
+006e2fb0  ServerNotify_send_via_0x12d_simple_128Bpayload
+00893380  ServerNotify_createResumeChecker_atCmdSubsystem_0xf8
+0089d220  ChatBuilder_singleTarget_writeCommandTag_A
+0089d170  ChatBuilder_singleTarget_writeCommandTag_B
+0089d340  ChatBuilder_singleTarget_writeCommandTag_D
+0089e320  ChatBuilder_tell_readRecipientName
+0089e3f0  ChatBuilder_tell_thunk
+00d3a380  Crc32_standard_sliceBy8_poly_0xEDB88320
+00d3aae0  SqexCrypt_Crc32_finalize_returnValue
+00d3ab60  SqexCrypt_Crc32_init_computeOverBuffer
+```
+
+## Async: ResumeChecker / FunctionEndCallback / CoroutineContext
+
+```text
+007139c0  AppendMessageResumeChecker_ctor
+00713e70  CameraTutorialResumeChecker_ctor
+00713d50  ItemSearchWidgetResumeChecker_ctor
+00d0bb10  LpbLoader_ResumeChecker_ctor
+00713fe0  OnInitResumeChecker_ctor
+00725a50  SpreadSheet_LoadDataResumeChecker_ctor
+00713a50  TargetTutorialResumeChecker_ctor
+006dc0e0  WaitForCharaSchedulerFinishedResumeChecker_ctor
+007177b0  WaitForCharaSchedulerTutorialFinishedResumeChecker_ctor
+006dc040  WaitForTurningResumeChecker_ctor
+0078b850  WaitResumeChecker_ctor
+0071db70  SpreadSheet_LoadDataFunctionEndCallback_ctor
+00cd2630  CoroutineContext_findPendingCallback
+00cd27d0  CoroutineContext_isTrackingEnabled
+00cd28c0  CoroutineContext_pushEndCallback
+00cd2860  CoroutineContext_pushResumeChecker
+```
+
+## Lua class system (registry + thunks + bindings)
+
+```text
+00cd91e0  ClassRegistry_addDerivedClass
+00cda600  ClassRegistry_addDerivedClass_v2
+00cd9c10  ClassRegistry_clearPendingFlag
+00cd9c60  ClassRegistry_lookupAndCheckCategoryTag
+00cc7200  ClassRegistry_lookupAndCheckCategoryTag_wrapper
+00cd8870  ClassRegistry_lookupOrErrorPending
+00cede40  LuaClass_resolveOrRegisterClassByName
+00cd7a30  LuaClass_resolveTypeChainStart
+00cd8100  LuaClass_walkParentChain_checkClassId
+00cc7210  IsInstanceOf_dynamic_dispatch_luaClassChainWrapper
+00cd8990  LuaGameEngine_installBootBindings
+00709640  global_cpp_createActor_thunk
+006dcc30  global_cpp_defineClass_thunk
+006ff1a0  global_canCreateActorByName_thunk_creatabilityCheck
+006ff210  global_isInstanceOf_thunk_dualDispatch_7rtti_plus_luaChain
+006dbcb0  ActorBase_cpp_wait_thunk
+006e7670  CharaBase_cpp_updateWork_thunk
+006e4b40  CharaBase_cpp_waitForCharaSchedulerFinished_thunk
+006e1700  CharaBase_cpp_waitForTurning_thunk
+006eced0  DesktopWidget_cpp_appendMessagePool_thunk
+006fe2a0  DesktopWidget_cpp_parseTextCommand_thunk
+006e1c50  DesktopWidget_cpp_waitForCameraTutorial_thunk
+006e1b90  DesktopWidget_cpp_waitForItemSearchWidget_thunk
+006e5710  DesktopWidget_cpp_waitForTargetTutorial_thunk
+006e8890  GroupBase_cpp_updateWork_thunk_customDispatch
+0070a720  SpreadSheet_cpp_getData_thunk
+006f0840  SpreadSheet_cpp_loadKeyTemporarily_thunk
+006e6c20  WorldMaster_cpp_waitForCharaSchedulerTutorialFinished_thunk
+```
+
+## global module Lua registrars (selected)
+
+```text
+007582e0  global_registerAllLuaBindings
+00753320  global_registerLua_canCreateActorByName
+00757350  global_registerLua_createActor
+0073c3c0  global_registerLua_defineBaseClass
+0073c270  global_registerLua_defineClass
+0073c510  global_registerLua_getActorByName
+007535c0  global_registerLua_getQuestActorForCutSceneReplay
+00741a30  global_registerLua_getStaticActor
+0073ca50  global_registerLua_getUTF8StringByteLength
+0073c900  global_registerLua_getUTF8StringLength
+0073c660  global_registerLua_isExistActor
+00741b80  global_registerLua_isExistStaticActor
+00753470  global_registerLua_isInstanceOf
+00753710  global_registerLua_normalizeDisplayName
+0073c7b0  global_registerLua_prepareAllCommandStaticActor
+00753860  global_registerLua_replaceMacroCodeString
+```
+
+## 17 native master registrars (one per Lua-exposed class)
+
+```text
+00753c30  ActorBaseClass_registerAllLuaBindings
+00754e70  AreaBaseClass_registerAllLuaBindings
+00753cf0  AreaMaster_registerAllLuaBindings
+007574a0  CharaBaseClass_registerAllLuaBindings
+00757ce0  Debug_registerAllLuaBindings
+00757ea0  DesktopWidget_registerAllLuaBindings
+00758260  DirectorBaseClass_registerAllLuaBindings
+00757b70  GroupBaseClass_registerAllLuaBindings
+00753dd0  ItemBaseClass_registerAllLuaBindings
+00740ec0  Math_registerAllLuaBindings
+00754850  NpcBaseClass_registerAllLuaBindings
+00753f90  PlayerBase_registerAllLuaBindings
+007547d0  Sequence_registerAllLuaBindings
+00758670  SpreadSheet_registerAllLuaBindings
+00754a60  WidgetBaseClass_registerAllLuaBindings
+00754c70  WorldMaster_registerAllLuaBindings
+```
+
+## invokeLua callbacks (engine -> Lua event handlers)
+
+```text
+006f6d60  Actor_invokeLua_onInit
+006f6ed0  Actor_invokeLua_onFinalize_v2
+006f73b0  Actor_invokeLua_onUpdateWork
+00700cc0  Actor_invokeLua_onUpdateWork_withWorkRecord
+00706f60  Actor_invokeLua_onReaction
+0078bbb0  typed_invokeLua_onInit_helper
+006f6a80  CharaBase_invokeLua_onInit
+006fae70  CharaBase_invokeLua_onChangeSystemFlag
+006fb430  CharaBase_invokeLua_onChangeAccessibleInServer
+006faff0  CharaBase_invokeLua_onUpdateDisplayName_idChange
+006fb280  CharaBase_invokeLua_onUpdateDisplayName_nameChange
+006f7000  ItemBase_invokeLua_onInit
+006f71a0  ItemBase_invokeLua_onFinalize
+00706dc0  MyPlayer_invokeLua_onChangeJob
+007084e0  MyPlayer_invokeLua_onChangeSubStatMode
+00707d60  MyPlayer_invokeLua_onChangeSubStatStatus
+00703f60  MyPlayer_invokeLua_onChocoboRideEvents
+006f7fa0  MyPlayer_invokeLua_onJobQuestCompleteFirst_timeGated
+006f80d0  MyPlayer_invokeLua_onJobQuestCompleteSecond_timeGated
+007037e0  MyPlayer_invokeLua_onJobQuestCompleteThird_timeGated
+0070a350  MyPlayer_invokeLua_onLoginEvent_timeGated
+006f8200  MyPlayer_onMoveAtSit_eventHandler
+006f7cd0  MyPlayer_dispatchCancelJobQuestComplete_3stage
+00897660  Player_invokeLua_onPreEvent
+008977b0  Player_invokeLua_onPostEvent
+00897b40  Player_invokeLua_onPreCommand
+00897c60  Player_invokeLua_onPostCommand
+00897a20  Player_invokeLua_onCommandRejected
+00897d90  Player_invokeLua_onCommandCancel_v1
+00897ee0  Player_invokeLua_onCommandCancel_v2
+00898030  Player_invokeLua_onEventCancel_v1
+008981a0  Player_invokeLua_onEventCancel_v2
+00898310  Player_invokeLua_onEventCancel_v3
+00898760  Player_invokeLua_onEventCancel_v4
+008988d0  Player_invokeLua_onEventCancel_v5
+00898a40  Player_invokeLua_onEventCancel_v6
+00898bb0  Player_invokeLua_onEventCancel_v7
+00898d20  Player_invokeLua_onTouch_proximityBegin
+00898eb0  Player_invokeLua_onTouch_proximityEnd
+006f8350  Player_invokeLua_onGetGoobbue
+00700760  Group_invokeLua_onUpdateMemberInformation
+007008b0  Group_invokeLua_onUpdateMember_idAndBool
+00700a10  Group_invokeLua_onUpdateMember_refAndBool
+00700b70  Group_invokeLua_onUpdateMember_nullAndBool
+00700e70  Group_invokeLua_onUpdateGroupCurrent
+00700ff0  Group_invokeLua_onUpdateGroupCurrent_simple
+00709ca0  Group_invokeLua_onUpdateGroupInformation
+00702e30  Trade_invokeLua_onUpdateItemPackage
+007030d0  Trade_invokeLua_onUpdateTradingItem
+00703280  Trade_invokeLua_onUpdateTradingItem_withResolve
+00703970  Achievement_invokeLua_onReceiveAchievementId_loop
+00704430  Achievement_invokeLua_onReceiveAchievementId_single
+00704690  Achievement_invokeLua_onReceiveAchievementRate
+006fbcc0  CutScene_invokeLua_onInitializationClip_PreviewSetupClip
+006fbe80  CutScene_invokeLua_onInitializationClip
+006fb9c0  CutScene_invokeLua_onFinalizeClip
+006fc080  CutScene_invokeLua_onShowUIClip
+006fc260  CutScene_invokeLua_onHideUIClip
+006fc3a0  CutScene_invokeLua_onShowWidgetClip
+006fc4d0  CutScene_invokeLua_onHideWidgetClip
+006fc5f0  CutScene_invokeLua_onOpenUIClip
+006fede0  DesktopWidget_invokeLua_onPreWarp
+006fef10  DesktopWidget_invokeLua_onPostWarp
+006fe960  DesktopWidget_invokeLua_onTargetChanged
+006febb0  DesktopWidget_invokeLua_onTargetDecided
+006ff040  DesktopWidget_invokeLua_onCreatedWidgetInWidgetContainer
+008a45d0  System_invokeLua_onPreCutSceneCancel
+008a4720  System_invokeLua_onPostCutSceneCancel
+008a4880  DebugConsole_invokeLua_onDebugInput
+00707610  invokeLua_onHoverHelp
+00707300  invokeLua_onLoadKeyAsync
+0070a580  invokeLua_onLoadMultiKeyAsync
+```
+
+## Notes / caveats
+
+```text
+- Addresses are absolute (Ghidra default image base for this binary).
+- This is a CURATED export of architecturally significant renames
+  harvested by naming-prefix search; it is not every label in the
+  program. Hundreds of per-binding `*_registerLua_*` functions exist
+  beyond the global ones listed here.
+- `ClassRegistry_addDerivedClass` appears at two addresses (overload);
+  the second is suffixed `_v2` in this map for uniqueness on re-import.
+- For comments + data-type definitions (not just names), use Ghidra's
+  native `File -> Export Program` -- this map carries names only.
+- Cross-reference each name's full analysis in docs/re/exe/finding_*.md
+  and the lookup tables in docs/re/QUICK_REFERENCE.md.
+```
