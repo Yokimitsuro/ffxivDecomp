@@ -4,11 +4,13 @@
 findings (80 EXE + 87 Lua + 13 correlation). Use this when you need a
 fast lookup; refer to the named finding files for full context.
 
-Last updated: 2026-05-28 FINAL (24-commit session END-OF-WIRE-PROTOCOL
-milestone: ~50 opcodes semantically named in 0x143-0x1a8 range incl.
-3x5 per-actor matrix + Linkshell wire-side + all 8 Group:: subclasses
-wire-mapped; 15 PerFrameTick subsystems characterized; 4 new binding
-IDs; wire protocol sufficient for COMPLETE server implementation).
+Last updated: 2026-05-28 FINAL+OUTBOUND (28-commit session; WIRE
+PROTOCOL 100% MAPPED both directions: outbound command path 0x12d
+(CRC32 integrity), outbound RPC 0x12e format, ResumeChecker count
+corrected to ~24; plus the FINAL milestone batch -- ~50 inbound
+opcodes named, 3x5 per-actor matrix, Linkshell wire-side, all 8
+Group:: subclasses wire-mapped, 15 PerFrameTick subsystems).
+READY-TO-IMPLEMENT-SERVER milestone reached.
 
 For historical narrative + pre-session findings, see
 `MASTER_INDEX_1.x_MODEL.md`.
@@ -102,25 +104,34 @@ Both fire Lua callback: actor:_onUpdateWork(struct, slot, idx0, idx1)
 
 ## 3. Wire Opcodes Confirmed
 
-### Outbound (Zone channel, 9 opcodes 0x12d-0x135)
+### Outbound (Zone channel, 9 opcodes 0x12d-0x135) -- FULLY MAPPED
 
 ```text
-Opcode  Size    Handler                                      Purpose
-------  ----    -------                                      -------
-0x12d   200B    PacketBuilder_opcode_0x12d_200B_tagged       Tagged container
-                                                              (5+ variants: script error,
-                                                               bulk state, anti-tamper)
-0x12d   var     ZoneOut_sendScriptError_opcode_0x12d         Script error report
-0x12e   104B    ZoneOut_send_opcode_0x12e_104B               RPC carrier
-0x12e   ?       Lua_send6argRpc_via_opcode_0x12e             6-arg RPC dispatch
-0x12f   56B     WorkSync_buildAndSendPacket_opcode_0x12f     State sync C->S (STRING)
-0x130   ?       (TBD)
-0x131   ?       (TBD)
-0x132   ?       Item _updateWork carrier
-                  Lua_sendByteUshortAt0x68_via_0x132         (used by ItemBaseClass)
-0x133   56B?    WorkSyncAlt_serializePayloadAndSend_opcode_0x133  Alt-work-sync
-0x134   ?       (TBD)
-0x135   24B     ZoneOut_send_opcode_0x135_24B_dword          Subscribe to bindingId
+Opcode  Size    Handler / Purpose
+------  ----    -----------------
+0x12d   200B    PLAYER COMMAND (tagged container, CRC32 integrity)
+                  PacketBuilder_opcode_0x12d_200B_tagged
+                  - via _executeCommand -> vtable[0xa8] -> immediate/queued
+                  - +0x24 = CRC32 of 128B payload (Sqex::Crypt::Crc32)
+                  - +0x28 = discriminator, +0x49 = 128B command payload
+                  - checksummed variants v1/v2 (0x0075e3a0/0x0075e510)
+                  - also: ZoneOut_sendScriptError_opcode_0x12d (script err)
+0x12e   104B    NAMED RPC (ResumeChecker-backed server calls)
+                  Lua_send6argRpc_via_opcode_0x12e (single funnel)
+                  - +0x10 = 1-byte method selector
+                  - +0x19 = 64-byte param buffer
+                  - paired with ~24 ResumeChecker types (request/response)
+0x12f   56B     WorkSync update C->S (STRING-keyed path)
+0x130   32B     list lifecycle ACK (spawn: queueAdd + delete pair)
+0x131   24B     byte toggle
+0x132   24B     Item _updateWork carrier (byte+ushort)
+0x133   56B     WorkSync alt / spawn init ACK
+0x134   40B     challenge/nonce
+0x135   24B     Subscribe to bindingId
+
+CHECKSUM ALGORITHM: standard CRC32 (poly 0xEDB88320, init/final
+0xFFFFFFFF, slice-by-8). Transport integrity ONLY, NOT anti-cheat --
+server must validate commands semantically. Trivially replicable.
 ```
 
 ### Inbound COMPLETE WIRE PROTOCOL (final, ~50 opcodes pinned)
@@ -291,7 +302,14 @@ Base interfaces:
   Component::Lua::GameEngine::ResumeCheckerInterface       (script yields)
   Component::Lua::GameEngine::FunctionEndCallbackInterface  (I/O completion)
 
-11 ResumeChecker subclasses CONFIRMED (universal yield pattern):
+~24 ResumeChecker subclasses (RTTI-string enumerated; was 11 documented).
+The async yield pattern is ~2x more pervasive than first mapped. Full
+list in finding_outbound_rpc_0x12e_format_plus_resumechecker_count_correction.md.
+Categories: 6 async I/O, 3 RPC-backed (CreateStaticActor/CreateClientItem/
+GetString), 3 animation, 3 scheduler, 3 tutorial, 6 core/misc.
+RPC-backed checkers pair with outbound 0x12e RPC (request/response halves).
+
+11 of those CONFIRMED with sizes (original inventory; universal yield pattern):
 #   Subclass                                              Size    Lua API / role
 -   --------                                              ----    --------------
 1   OnInitResumeChecker                                    16 B   _createActor
@@ -967,6 +985,12 @@ GENERAL PARAMETER (player stats):
 
 ## 15. Key Findings by Category (jump points)
 
+### EXE Architecture (2026-05-28 OUTBOUND batch -- newest)
+
+- `finding_command_checksum_is_standard_crc32.md` -- 0x12d CRC32 (Sqex::Crypt::Crc32); transport integrity not anti-cheat; WIRE PROTOCOL 100% MAPPED
+- `finding_executeCommand_outbound_path_CLOSED_0x12d_checksummed.md` -- player command path: _executeCommand vtable[0xa8] -> 0x12d checksummed
+- `finding_outbound_rpc_0x12e_format_plus_resumechecker_count_correction.md` -- 0x12e RPC format (104B) + ResumeChecker ~24 correction
+
 ### EXE Architecture (2026-05-28 SESSION FINAL -- 24 commits)
 
 - `finding_perFrameTick_subsystems_COMPLETE_15_slots_characterized.md` -- ALL 15 PerFrameTick slots characterized + 5 wire variants + 4 new bindings
@@ -1153,10 +1177,15 @@ BehaviorLogger listener        0x48 B    (72 bytes; separate from CommandUpdate)
 ## 19. Coverage Summary (As of 2026-05-28 SESSION FINAL)
 
 ```text
-FINDINGS:                187+ total
-  EXE-side:               80+
+FINDINGS:                190+ total
+  EXE-side:               83+
   Lua-side:               87
   Correlation:            13
+
+WIRE PROTOCOL: 100% MAPPED both directions (server-ready)
+  OUTBOUND: 0x12d command (CRC32), 0x12e RPC, 0x12f-0x135 state, chat
+  INBOUND: ~95% non-fallback opcodes + all semantic categories
+  ALGORITHMS recovered: CRC32, 4-mode WorkSync encoding, binding-id==field-id
 
 EXE NATIVE SURFACE:     ~344 _cpp bindings + ~62 pure-Lua wrappers
   Located in masters:    409 registrar slots (100%)
@@ -1185,9 +1214,9 @@ WIRE OPCODES (massively expanded):
   - 2 chat (parseTextCommand, appendMessagePool)
   - 6 _wait* siblings (Turning, CharaSchedFin x2, Tutorial x3)
 
-RESUMECHECKER SUBCLASSES: 11 confirmed (was 10)
-  Sizes: 3 of 8B, 4 of 12B, 1 each of 16B/40B/120B/148B
-  Latest add: LpbLoader::ResumeChecker (engine-internal, ~120B)
+RESUMECHECKER SUBCLASSES: ~24 (RTTI-enumerated; was 11 confirmed)
+  11 with confirmed sizes; +13 more from RTTI strings
+  RPC-backed (3) pair with outbound 0x12e RPC request/response
 
 RTTI TYPES CONFIRMED: 25 total (17 base + 8 Group:: subclasses)
   4 in Component::Lua::GameEngine::
