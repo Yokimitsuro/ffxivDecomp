@@ -2,18 +2,75 @@
 
 This document is the **executive summary** of the reverse-engineering
 work completed during the multi-session research effort. The 1.x
-client model is decomposed across **190+ findings** (90 EXE + 87 Lua
+client model is decomposed across **196+ findings** (90 EXE + 93 Lua
 + 13 correlation) covering: wire protocol, schemas, native binding
 APIs, gameplay subsystems, data correlations.
 
-Last updated: 2026-05-28 OUTBOUND (28-commit session; WIRE PROTOCOL
-100% MAPPED both directions -- outbound command path 0x12d (CRC32),
-outbound RPC 0x12e, ResumeChecker ~24; plus the inbound milestone
-batch. READY-TO-IMPLEMENT-SERVER milestone reached).
+Last updated: 2026-05-28 +CONTENT (35-commit session). WIRE PROTOCOL
+100% bidirectional + CONTENT MODEL mapped (work schemas, command flow,
+zone bootstrap, NPC talk-turn, Director orchestration). KEY PRINCIPLE
+confirmed x4: content is client-side; server orchestrates state +
+triggers + authorization. READY-TO-IMPLEMENT-SERVER.
 
 **For fast lookups**, see `docs/re/QUICK_REFERENCE.md` (22 sections,
 lookup tables for all architectural facts). This index has the
 narrative; QUICK_REFERENCE has the tables.
+
+## Session 2026-05-28 +CONTENT -- CONTENT MODEL + ARCHITECTURAL PRINCIPLE (+7 commits)
+
+```text
+After the wire protocol (both directions), mapped the CONTENT MODEL
+via Lua deep-dives -- how the game actually works -- and uncovered
+the defining architectural principle.
+
+THE ARCHITECTURAL PRINCIPLE (confirmed across 4 independent layers):
+  "Content is CLIENT-SIDE; server orchestrates STATE + TRIGGERS + AUTH"
+
+  CLIENT-LOCAL: zone data (CSVs), NPC dialogue/animation, combat
+    formulas, content orchestration (Director scripts)
+  SERVER: triggers (spawn by class name), state (WorkSync), notice
+    authorization, reward grants -- NEVER sends content
+  WHY: compact wire protocol, feasible server, extensive client Lua
+
+WORK SCHEMAS (server-replicable state):
+  BATTLE (initBattleSync):
+    battleSave: potencial, physicalLevel/Exp, skillLevel/Cap/Point[52],
+      negotiationFlag[2]
+    battleTemp: castGauge_speed[2], timingCommandFlag[4],
+      generalParameter[35] (28 synced 4-19,24-35 + 7 local 1-3,20-23)
+  EVENT (initEventSyncWork):
+    eventSave: bazaar, bazaarTax, repairType
+    eventTemp: linkshellIcon[4], bazaarRetail/Repair/Materia
+  AREA: areaWork (actorNumber, isInstanceRaid, isEntranceDesion,
+    _assignForChild[64]); 8 zone prefixes Fld/Dgn/Twn/Btl/Tes/Evt/Shp/Ofc
+  DIRECTOR: work._temp + _sync + _tag; updateSyncWork rate-limited
+
+COMMAND FLOW (playerbaseclass):
+  command -> canCommand -> _onCommandRequest -> _executeCommand -> 0x12d
+  Gating: commandBurstBlocker (bypass 12017/12009), 50-char limit
+  Timing combos: flag set -> player 27xxx -> server timing packet ->
+    _onReceiveTimingPacket auto-executes follow-up (raid 30004 / 22004)
+
+ZONE BOOTSTRAP (areabaseclass):
+  create -> _onInit (declare areaWork, loop interval=1, load CSVs
+  client-local) -> _onLoop -> _onFinalize. Server job: handoff + spawn
+  population + state sync (NOT static zone data).
+
+NPC TALK-TURN (npcbaseclass_event):
+  startCliantTalkTurn (NPC faces player, _waitForTurning yield) ->
+  normalTalkStep0 (gesture anim + showMessage channel 38) -> say/ask ->
+  finishCliantTalkTurn. All client-side; server triggers + tracks.
+
+DIRECTOR ORCHESTRATION (DirectorBaseClass):
+  Server spawns director (0x17c by class) -> client runs event Lua ->
+  delegateEvent steps -> updateSyncWork (state push) -> notice
+  authorization (noticeEvent accept / _onNoticeRejected) -> despawn.
+  226+ director subclasses drive all content.
+
+IMPLICATION: a 1.x server is an ORCHESTRATOR (state authority +
+triggers + authorization), NOT a content engine. The client is the
+rich content engine. This is why the project is feasible.
+```
 
 ## Session 2026-05-28 OUTBOUND -- WIRE PROTOCOL 100% MAPPED (+4 commits)
 

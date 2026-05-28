@@ -4,13 +4,12 @@
 findings (80 EXE + 87 Lua + 13 correlation). Use this when you need a
 fast lookup; refer to the named finding files for full context.
 
-Last updated: 2026-05-28 FINAL+OUTBOUND (28-commit session; WIRE
-PROTOCOL 100% MAPPED both directions: outbound command path 0x12d
-(CRC32 integrity), outbound RPC 0x12e format, ResumeChecker count
-corrected to ~24; plus the FINAL milestone batch -- ~50 inbound
-opcodes named, 3x5 per-actor matrix, Linkshell wire-side, all 8
-Group:: subclasses wire-mapped, 15 PerFrameTick subsystems).
-READY-TO-IMPLEMENT-SERVER milestone reached.
+Last updated: 2026-05-28 +CONTENT (35-commit session). WIRE PROTOCOL
+100% bidirectional + CONTENT MODEL mapped: work schemas (battle/event/
+player/area/director), command flow, zone bootstrap, NPC talk-turn,
+Director orchestration. KEY ARCHITECTURAL PRINCIPLE confirmed x4:
+"content is client-side; server orchestrates state + triggers +
+authorization". READY-TO-IMPLEMENT-SERVER milestone reached.
 
 For historical narrative + pre-session findings, see
 `MASTER_INDEX_1.x_MODEL.md`.
@@ -958,6 +957,61 @@ Used by:
   - Various other ___RTDynamicCast call sites
 ```
 
+## 13d. THE ARCHITECTURAL PRINCIPLE (client-side content) -- confirmed x4
+
+```text
+"CONTENT IS CLIENT-SIDE; SERVER ORCHESTRATES STATE + TRIGGERS + AUTH"
+
+CLIENT-LOCAL (client already has it; server never sends):
+  - Zone geometry/data (CSVs loaded by areabaseclass _onInit)
+  - NPC dialogue/animation/choices (npcbaseclass_event say/ask)
+  - Combat formulas + stat tables (charabaseclass getMagicAttack etc.)
+  - Content orchestration logic (Director event scripts)
+
+SERVER AUTHORITY (minimal):
+  - TRIGGERS: spawn actors/directors (0x17c) by class name
+  - STATE: WorkSync replication (battleSave/eventSave/director._sync)
+  - AUTHORIZATION: notices (noticeEvent -> accept / _onNoticeRejected),
+    command validation (semantic), reward grants
+  - Never sends content (text/geometry/logic)
+
+WHY: explains the compact wire protocol (ids/flags not content),
+the feasibility of a server (orchestrator not engine), and the
+extensive client Lua (it IS the game logic).
+
+Confirmed across 4 independent layers: zone / NPC / combat / director.
+```
+
+## 13e. Work Schemas (server-replicable state)
+
+```text
+BATTLE (charabaseclass initBattleSync):
+  battleSave (persistent): potencial(float), physicalLevel(i16),
+    physicalExp(i32), skillLevel/Cap/Point[52], negotiationFlag[2]
+  battleTemp (transient): castGauge_speed[2], timingCommandFlag[4],
+    generalParameter[35] (28 synced indices 4-19,24-35 + 7 local 1-3,20-23)
+  Sync groups: battleStateForSelf (self), timingCommand, battleParameter
+
+EVENT (charabaseclass initEventSyncWork):
+  eventSave (persistent): bazaar (player shop), bazaarTax(i8), repairType(i8)
+  eventTemp (transient): linkshellIcon[4], bazaarRetail/Repair/Materia(bool)
+
+AREA (areabaseclass):
+  areaWork._temp: actorNumber(i16), isInstanceRaid(bool),
+    isEntranceDesion(bool), _assignForChild[64]
+  8 zone-type prefixes: Fld/Dgn/Twn/Btl/Tes/Evt/Shp/Ofc
+
+DIRECTOR (DirectorBaseClass):
+  work._temp (local) + work._sync (replicated) + work._tag (sync group)
+  updateSyncWork -> _updateWork (rate-limited by canRequestInformation)
+
+COMMAND FLOW (playerbaseclass):
+  command -> canCommand -> _onCommandRequest -> _executeCommand -> 0x12d
+  Gating: commandBurstBlocker (bypass cmd 12017/12009), 50-char limit
+  Timing combos: timingCommandFlag set -> player 27xxx -> server timing
+    packet -> _onReceiveTimingPacket auto-executes follow-up (30004/22004)
+```
+
 ## 14. Eorzea Time & Bandwidth Model
 
 ```text
@@ -1039,7 +1093,15 @@ GENERAL PARAMETER (player stats):
 - `finding_invokeLua_roster_closed_80_complete.md` -- 80 invokeLua callbacks
 - `finding_widget_3tier_dispatcher_architecture.md` -- 3-tier widget dispatch
 
-### Lua Architecture (2026-05-28 SESSION -- newest)
+### Lua Architecture (2026-05-28 CONTENT batch -- newest)
+
+- `finding_directorbaseclass_content_orchestration_model.md` -- Director content engine: _sync state + notice authorization (client-side-content x4)
+- `finding_npc_event_talk_turn_flow_client_side.md` -- NPC talk-turn flow; dialogue is client-side; channel 38
+- `finding_areabaseclass_zone_bootstrap_sequence.md` -- zone bootstrap; zone CSVs client-local; 8 zone-type prefixes
+- `finding_playerbaseclass_command_flow_and_player_module.md` -- command flow (-> 0x12d) + timing-combo inbound + 18 _on* callbacks
+- `finding_charabaseclass_battle_schema_and_timing_commands.md` -- battle/event WorkSync schemas + timing-command combos
+
+### Lua Architecture (prior session)
 
 - `finding_desktopwidget_connector_main_orchestrator_architecture.md` -- DesktopWidget connector (26,564 lines, 255 methods, 13 subsystems)
 
@@ -1177,11 +1239,14 @@ BehaviorLogger listener        0x48 B    (72 bytes; separate from CommandUpdate)
 ## 19. Coverage Summary (As of 2026-05-28 SESSION FINAL)
 
 ```text
-FINDINGS:                190+ total
+FINDINGS:                196+ total
   EXE-side:               83+
-  Lua-side:               87
+  Lua-side:               93
   Correlation:            13
 
+CONTENT MODEL: client-side content + server orchestration (x4 confirmed)
+  Work schemas: battle/event/player/area/director (server-replicable)
+  Flows: command->0x12d, spawn, zone bootstrap, NPC talk-turn, director
 WIRE PROTOCOL: 100% MAPPED both directions (server-ready)
   OUTBOUND: 0x12d command (CRC32), 0x12e RPC, 0x12f-0x135 state, chat
   INBOUND: ~95% non-fallback opcodes + all semantic categories
