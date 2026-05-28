@@ -182,18 +182,57 @@ Speculative:
     sequence id to wake the ResumeChecker
 ```
 
-## 9. Open thread (function creation needed)
+## 9. WIRE PATH CONFIRMED (functions created + traced)
+
+Both thunks created in Ghidra and traced end-to-end:
 
 ```text
-To definitively confirm the wire opcode + vtable slots:
-  - Create functions at LAB_006de680 (callServerOnCommand) and
-    LAB_006e9520 (callServerOnTalk) in Ghidra (Ctrl+G + F)
-  - Read the vtable slot each jumps to
-  - Decompile the concrete impl to confirm 0x12d vs 0x12e
+callServerOnCommand:
+  PlayerBase_callServerOnCommand_thunk_jmp_vtable_0xb4 (0x006de680)
+    MOV EAX,[ECX]; MOV EAX,[EAX+0xb4]; JMP EAX  -- vtable[0xb4] slot 45
+   -> MyPlayer_callServerOnCommand_impl_vtable0xb4_send_suspend (0x006e8b30)
+      [extract command from Lua stack, lookup at this+0xfc]
+   -> ServerNotify_send_via_0x12d_simple_128Bpayload (0x006e2fb0)
+      -> ZoneOut_send_large_simple  == OPCODE 0x12d SIMPLE (no checksum)
+   -> ServerNotify_createResumeChecker_atCmdSubsystem_0xf8 (0x00893380)
+   -> CoroutineContext_pushResumeChecker  -- SUSPEND until server responds
 
-The architectural model (notice = server authorization via
-callServerOnX + ResumeChecker wait) is confirmed; only the exact
-wire opcode for the notify send is pending.
+callServerOnTalk:
+  NpcBase_callServerOnTalk_extractArgs_sendNotify_suspend (0x006e9520)
+   -> FUN_006e5c00 -> FUN_006e2e40 (talk notify send, sibling of 006e2fb0)
+   -> same ResumeChecker suspend pattern
+
+MyPlayer vtable confirmed:
+  [42] 0xa8 = executeCommand (0x0070a010)         -> 0x12d CHECKSUMMED
+  [45] 0xb4 = callServerOnCommand (0x006e8b30)    -> 0x12d SIMPLE
+```
+
+### KEY DISTINCTION: checksummed vs simple 0x12d
+
+```text
+  _executeCommand (player abilities)   -> 0x12d CHECKSUMMED (v1/v2, CRC32)
+  callServerOnX  (system/event notify) -> 0x12d SIMPLE (no CRC)
+
+Both are 0x12d / 200B tagged container with a 128-byte payload.
+Player ABILITIES get anti-tamper CRC32; system/event NOTIFIES use the
+simple variant. The discriminator byte at packet+0x28 distinguishes
+the variants server-side.
+```
+
+### CONFIRMED notice flow (definitive)
+
+```text
+1. Client calls callServerOnX (event needs server authorization)
+2. -> 0x12d SIMPLE packet sent to server (128B payload: event + actor + params)
+3. -> ResumeChecker created (FUN_00893380 at cmd subsystem this+0xf8)
+      + CoroutineContext_pushResumeChecker -> SCRIPT SUSPENDS
+4. Server validates the event
+5. Server response:
+   - ACCEPT -> wakes the ResumeChecker -> script resumes -> event proceeds
+   - REJECT -> _onNoticeRejected fires -> _onEventCancel (cleanup)
+
+The ResumeChecker is almost certainly ClientOrderEventWaitingResumeChecker
+(per the ResumeChecker correction finding) -- the notice-wait checker.
 ```
 
 ## 10. Cross-references
