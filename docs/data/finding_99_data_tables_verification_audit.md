@@ -175,8 +175,10 @@ SERVER-RELEVANT DATA TABLES (the ~45 the server actually needs):
   critical table is left as an unknown black box.
 
 The few genuine refinement gaps (not blocking):
-  - actorclass (7984 rows): the actor-class master is sparse in
-    decode_csv; the full id->class mapping may need the raw_csv variant
+  - actorclass (7984 rows): RESOLVED -- see
+    finding_actorclass_family_decoded.md. It is a thin actorClassId ->
+    displayName id map (raw == decode); appearance lives in the sibling
+    actorclass_graphic table. Not "sparse data", just thin by design.
   - 2Dmap_* exact column semantics (minimap geometry; client-rendered)
   - guildleve/request full column meanings (leve content; decodable
     on demand when leve server logic is specified)

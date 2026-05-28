@@ -952,6 +952,12 @@ docs/data/finding_99_data_tables_verification_audit.md
    7 gear sheets (itemData=stats; equipment/weapon/armor=model/scaling/
    defense; materia/equipSet/itemColor); column-decoded now 22; all
    server-relevant tables decoded or characterized
+
+docs/data/finding_actorclass_family_decoded.md
+   actorclass = actorClassId -> displayName id (verified Y'shtola/
+   Sthalmann/Dedela); actorclass_graphic = 40-col appearance; 
+   actorclass_mapObj = 160 map-object params; spawn 0x17c keys on
+   actorClassId, name+look are client-local (7th client-side confirm)
 ```
 
 ### Native Binding Rosters (API Surface)
