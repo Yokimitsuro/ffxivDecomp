@@ -4,13 +4,14 @@
 findings (80 EXE + 87 Lua + 13 correlation). Use this when you need a
 fast lookup; refer to the named finding files for full context.
 
-Last updated: 2026-05-28 +ENGINE-COMPLETE (43-commit session). WIRE
-PROTOCOL 100% bidirectional + CONTENT MODEL + ALL 13 ENGINE BASE
-MECHANICS mapped (Actor/Chara/Player/Npc/Area/Director/Quest/Status/
-Command/Judge/Item/Group/Widget). KEY PRINCIPLE confirmed x5: content
-is client-side; server orchestrates state + triggers + authorization.
+Last updated: 2026-05-28 +CONTENT-DATA-COMPLETE. WIRE PROTOCOL 100%
+bidirectional + CONTENT MODEL + ALL 13 ENGINE BASE MECHANICS mapped
+(Actor/Chara/Player/Npc/Area/Director/Quest/Status/Command/Judge/Item/
+Group/Widget) + CONTENT-DATA CSV STRUCTURE SWEEP (calc model closed +
+population tables decoded; see sec 7). KEY PRINCIPLE confirmed x5+:
+content is client-side; server orchestrates state + triggers + auth.
 The 1.x client engine architecture is FULLY MAPPED; remaining corpus
-is content instances. READY-TO-IMPLEMENT-SERVER.
+is content instances + mechanical table cataloging. READY-TO-IMPLEMENT-SERVER.
 
 For historical narrative + pre-session findings, see
 `MASTER_INDEX_1.x_MODEL.md`.
@@ -540,6 +541,31 @@ TIER 1 (35):  boot-loaded; server must push at session init
 TIER 2 (97):  per-class; lazy on actor spawn
 TIER 3 (32):  truly unmapped critical (need more sweeps)
 TIER 4 (625): useful tables (gear class variants, etc.)
+```
+
+### CONTENT-DATA COLUMN STRUCTURES DECODED (sweep complete)
+
+```text
+THE SERVER CALC MODEL (5 tables; CLOSED):
+  itemData      stats; col48 = compatibilityKey
+  status        Power=27, Life=47, Param2=35, Param3=39, flags 51-58
+  command trio  command/gameCommand(140c)/gameCommandBasic(120c);
+                effect block = paired (s32,float) cols 84-115
+  compatibility 220 curves x 43 level brackets (s8 %), cols 9-51
+  exp_BPCost    30 levels (cost/tier/low/high), linear +5/level
+  UNIVERSAL FORMULA: effectiveValue = base x compatibilityCurve[key][level] / 100
+
+CONTENT-POPULATION TABLES:
+  shopBase(241)  shop -> shopItem range (start,end)
+  shopItem(2544) (catalog_id, qty u8, price s32)
+  populace(4209) NPC master list; col65 = talk type
+  populaceXxx    53 typed tables = localized dialogue (CLIENT-LOCAL)
+  quest(737)     col39=category, col45=DIRECTOR ref, col52=area, col51=level
+  quest_reward(1265)     simple 6-col (gil/exp + item)
+  quest_new_reward(501)  16 slots x 13 cols; type 100=item, 4 qty tiers
+
+SPLIT: server stores stats/inventory/prices/quest-defs/rewards + NPC
+existence; client has dialogue/cutscenes/behavior/zone-geometry.
 ```
 
 ## 8. Class Hierarchy (Pure-API vs Actor-State Pattern)
@@ -1173,6 +1199,14 @@ GENERAL PARAMETER (player stats):
 - `docs/data/ffxivtool_table_catalog.csv` -- machine-readable catalog
 - `docs/data/ffxivtool_table_catalog.md` -- human-readable catalog
 - `docs/server/content_requirements/ffxivtool_import_plan.md` -- import plan
+
+### Content-Data CSV Structures (column layouts DECODED -- sweep complete)
+
+- `docs/data/finding_status_csv_column_structure.md` -- status.csv 59 cols (Power=27, Life=47, Param2=35, Param3=39, flags 51-58)
+- `docs/data/finding_command_csv_trio_structure.md` -- command/gameCommand(140c)/gameCommandBasic(120c); effect block cols 84-115
+- `docs/data/finding_compatibility_csv_growth_curves_closes_calc_model.md` -- 220 curves x 43 levels; CLOSES calc model (base x curve%/100) + exp_BPCost
+- `docs/data/finding_populace_and_shop_csv_structure.md` -- shopBase->shopItem (catalog/qty/price); populace 4209 NPCs; dialogue client-local
+- `docs/data/finding_quest_csv_structure_closes_content_data.md` -- quest.csv 737 (col45=director ref); quest_new_reward 16-slot x 13-col; CLOSES content-data sweep
 
 ## 16. The bindWork Catalog (25+ binding IDs known)
 

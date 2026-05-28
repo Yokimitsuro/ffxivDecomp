@@ -6,16 +6,68 @@ client model is decomposed across **202+ findings** (90 EXE + 98 Lua
 + 14 correlation) covering: wire protocol, schemas, native binding
 APIs, gameplay subsystems, data correlations.
 
-Last updated: 2026-05-28 +ENGINE-COMPLETE (43-commit session). WIRE
-PROTOCOL 100% bidirectional + CONTENT MODEL + ALL 13 ENGINE BASE
-MECHANICS mapped. KEY PRINCIPLE confirmed x5: content is client-side;
-server orchestrates state + triggers + authorization. The 1.x client
-ENGINE ARCHITECTURE IS FULLY MAPPED -- remaining corpus (~2600 Lua
-files) is content instances. READY-TO-IMPLEMENT-SERVER.
+Last updated: 2026-05-28 +CONTENT-DATA-COMPLETE. WIRE PROTOCOL 100%
+bidirectional + CONTENT MODEL + ALL 13 ENGINE BASE MECHANICS mapped +
+CONTENT-DATA CSV STRUCTURE SWEEP (server calc model closed + content-
+population tables decoded). KEY PRINCIPLE confirmed x5+: content is
+client-side; server orchestrates state + triggers + authorization. The
+1.x client ENGINE ARCHITECTURE IS FULLY MAPPED -- remaining corpus
+(~2600 Lua files + ~625 gear-variant tables) is content instances +
+mechanical cataloging. READY-TO-IMPLEMENT-SERVER.
 
 **For fast lookups**, see `docs/re/QUICK_REFERENCE.md` (22 sections,
 lookup tables for all architectural facts). This index has the
 narrative; QUICK_REFERENCE has the tables.
+
+## Session 2026-05-28 +CONTENT-DATA -- CSV STRUCTURE SWEEP COMPLETE
+
+```text
+After the engine sweep, decoded the COLUMN STRUCTURE of the key
+server-side CSV tables -- both the CALCULATION tables (the server's
+authoritative math) and the CONTENT-POPULATION tables (what the server
+stores to populate the world). This closes the content-data layer.
+
+THE SERVER CALC MODEL (5 tables, CLOSED):
+  itemData      item stats; col 48 = compatibilityKey
+  status.csv    59 cols; Power=27, Life=47, Param2=35, Param3=39,
+                classification/removal flags cols 51-58
+  command trio  command.csv(1662) / gameCommand.csv(1611,140c) /
+                gameCommandBasic.csv(1611,120c); effect block =
+                paired (s32,float) cols 84-115; category col 37
+  compatibility 220 level-scaling curves x 43 level brackets (s8 %,
+                cols 9-51); the getGrowData source
+  exp_BPCost    30 levels (cost/tier/low/high), linear +5/level
+  UNIVERSAL FORMULA (drives item/status/command potency):
+    effectiveValue = baseValue x compatibilityCurve[key][level] / 100
+
+CONTENT-POPULATION TABLES (decoded):
+  shopBase(241)  shop -> contiguous shopItem range (start, end)
+  shopItem(2544) (catalog_id, quantity u8, price s32)
+  populace(4209) NPC master list; col 65 = talk type
+  populaceXxx    53 typed tables = localized dialogue (CLIENT-LOCAL)
+  quest(737)     col39=category, col45=DIRECTOR/event ref, col52=area,
+                 col51=level/seq, col54/55 flags
+  quest_reward(1265)     simple 6-col reward (gil/exp + item)
+  quest_new_reward(501)  16 reward slots x 13 cols; type 100=item,
+                         item_id + 4 quantity tiers
+
+THE CLIENT/SERVER SPLIT (content-data, confirmed AGAIN):
+  SERVER stores: stats, shop inventory/prices, quest defs + rewards,
+    NPC existence -- the transaction/calc-relevant data
+  CLIENT has: NPC dialogue (localized), cutscenes, quest scripts,
+    zone geometry, combat presentation -- the content/presentation
+
+This means a server's DATA REQUIREMENTS are now fully scoped:
+  - 5 calc tables (the universal calc model)
+  - population tables (NPC list + shop inventories + quest defs/rewards)
+  - per-player state it tracks itself (quest flags, inventory, stats)
+  - ~625 remaining "useful" tables are itemData-family gear variants
+    (mechanical cataloging, documented patterns, in the 803-table catalog)
+
+CONTENT-DATA SWEEP COMPLETE for all major categories. Remaining CSV
+work is mechanical (gear variants, zone/territory, achievement tables)
+following documented patterns.
+```
 
 ## Session 2026-05-28 +ENGINE-COMPLETE -- ALL 13 BASE MECHANICS (+8 commits)
 
@@ -834,6 +886,30 @@ docs/re/lua/finding_item_common_inventory.md
 docs/re/lua/finding_normal_item_level_adjust.md
    NormalItem level-adjust formula (3 regimes)
    Materia system + degradation
+```
+
+### Content-Data CSV Structures (column layouts; server data)
+
+```text
+docs/data/finding_status_csv_column_structure.md
+   status.csv 59 cols; Power=27, Life=47, Param2=35, Param3=39,
+   classification/removal flags 51-58
+
+docs/data/finding_command_csv_trio_structure.md
+   command/gameCommand(140c)/gameCommandBasic(120c);
+   effect block = paired (s32,float) cols 84-115; category col 37
+
+docs/data/finding_compatibility_csv_growth_curves_closes_calc_model.md
+   220 level-scaling curves x 43 level brackets; CLOSES the calc model
+   (base x curve%/100); + exp_BPCost per-level cost curve
+
+docs/data/finding_populace_and_shop_csv_structure.md
+   shopBase(241)->shopItem(2544): catalog/qty/price; populace 4209 NPCs;
+   typed dialogue tables are CLIENT-LOCAL
+
+docs/data/finding_quest_csv_structure_closes_content_data.md
+   quest.csv 737 (col45=director ref, col52=area); quest_new_reward
+   16-slot x 13-col item rewards (4 qty tiers); CLOSES content-data sweep
 ```
 
 ### Native Binding Rosters (API Surface)
