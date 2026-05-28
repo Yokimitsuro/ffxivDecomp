@@ -946,6 +946,12 @@ docs/data/finding_gear_variant_tables_are_localized_text_CORRECTION.md
    CORRECTION: the "~625 gear-variant" tables are localized TEXT
    (704/803 = id+5xstr dialogue), NOT gear stats; refutes import-plan
    Phase 6; server data scope = ~45 tables
+
+docs/data/finding_99_data_tables_verification_audit.md
+   AUDIT: 99/99 numeric data tables cataloged (0 missing); decodes the
+   7 gear sheets (itemData=stats; equipment/weapon/armor=model/scaling/
+   defense; materia/equipSet/itemColor); column-decoded now 22; all
+   server-relevant tables decoded or characterized
 ```
 
 ### Native Binding Rosters (API Surface)

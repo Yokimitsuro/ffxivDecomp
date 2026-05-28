@@ -1233,6 +1233,7 @@ GENERAL PARAMETER (player stats):
 - `docs/data/finding_populace_and_shop_csv_structure.md` -- shopBase->shopItem (catalog/qty/price); populace 4209 NPCs; dialogue client-local
 - `docs/data/finding_quest_csv_structure_closes_content_data.md` -- quest.csv 737 (col45=director ref); quest_new_reward 16-slot x 13-col; CLOSES content-data sweep
 - `docs/data/finding_gear_variant_tables_are_localized_text_CORRECTION.md` -- CORRECTION: 704/803 tables are localized text not gear stats; refutes "gear-variant" backlog; server needs ~45 data tables
+- `docs/data/finding_99_data_tables_verification_audit.md` -- AUDIT: 99/99 data tables cataloged; gear sheets decoded (itemData=stats, equipment/weapon/armor=model/scaling/defense); all server-relevant tables covered
 
 ## 16. The bindWork Catalog (25+ binding IDs known)
 
