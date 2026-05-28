@@ -63,8 +63,28 @@ GROUP "timingCommand":
   -> battleTemp.timingCommandFlag (the 4 combo flags)
 
 GROUP "battleParameter":
-  -> battleTemp.generalParameter[4..15+] (individual indices)
-  (broadcast battle stats; each index is a separate sync field)
+  -> battleTemp.generalParameter[28 specific indices] (broadcast battle stats)
+```
+
+### generalParameter[35] sync map -- EXACT (28 synced + 7 local)
+
+```text
+SYNCED indices (28, registered in battleParameter group, broadcast):
+  4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+  24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35
+
+UNSYNCED indices (7, local-only -- client computes/displays):
+  1, 2, 3, 20, 21, 22, 23
+
+This CONFIRMS the "28 synced + 7 unsynced" split from the prior
+generalParameter finding, with the EXACT index list. The 7 local
+indices (1-3, 20-23) are likely derived/aggregate stats the client
+computes locally (total attack power, defense rollups, etc.) -- the
+server doesn't push them because they're functions of synced values.
+
+SERVER IMPLICATION: push only the 28 synced indices via the
+battleParameter sync group (per-actor broadcast). Skip indices
+1,2,3,20,21,22,23 -- the client derives those.
 ```
 
 These groups map directly to the WorkSync wire opcodes:
