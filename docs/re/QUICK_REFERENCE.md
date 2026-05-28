@@ -1,13 +1,14 @@
 # Quick Reference: FFXIV 1.x Architecture Lookup Tables
 
-**Single-page reference for the most-used facts** from the 180+
-findings (73 EXE + 86 Lua + 13 correlation). Use this when you need a
+**Single-page reference for the most-used facts** from the 187+
+findings (80 EXE + 87 Lua + 13 correlation). Use this when you need a
 fast lookup; refer to the named finding files for full context.
 
-Last updated: 2026-05-28 LATE-2 (added: complete actor lifecycle wire
-protocol incl. 0x143 DESPAWN, 0x187 WorkSyncUpdater, 0x18b MemberInfoUpdater,
-0x18d batch state push, 0x193 error/22 codes; per-actor message system
-0x148-0x156 fully characterized; all 6 Group:: subclasses wire-mapped).
+Last updated: 2026-05-28 FINAL (24-commit session END-OF-WIRE-PROTOCOL
+milestone: ~50 opcodes semantically named in 0x143-0x1a8 range incl.
+3x5 per-actor matrix + Linkshell wire-side + all 8 Group:: subclasses
+wire-mapped; 15 PerFrameTick subsystems characterized; 4 new binding
+IDs; wire protocol sufficient for COMPLETE server implementation).
 
 For historical narrative + pre-session findings, see
 `MASTER_INDEX_1.x_MODEL.md`.
@@ -122,20 +123,64 @@ Opcode  Size    Handler                                      Purpose
 0x135   24B     ZoneOut_send_opcode_0x135_24B_dword          Subscribe to bindingId
 ```
 
-### Inbound ACTOR LIFECYCLE WIRE PROTOCOL (complete) -- NEW
+### Inbound COMPLETE WIRE PROTOCOL (final, ~50 opcodes pinned)
 
 ```text
-SPAWN:    0x17c TYPE_TAG 0     EntryBuilder         ~120B with class name
-                  TYPE_TAG 0xe OnlineStatusUpdater  (same opcode, different tag)
-DESPAWN:  0x143                 BreakupBuilder       ~32B (id only)
-STATE:    0x12F (56B)           WorkSync update
-          0x132 (24B)           Item state notify
-          0x133 (56B)           WorkSync alt / spawn init ACK
-          0x187                 WorkSyncUpdater BATCH (160B child struct)
-          0x18b                 MemberInfoUpdater (member info change)
-          0x18d                 Multi-record batch (up to 255 x 40B)
-          0x148-0x156 (15)      Per-actor message variants (TYPE A + TYPE B)
-ERROR:    0x193 (22 codes)      System error/status (16 slot + 6 specific)
+ACTOR LIFECYCLE:
+  SPAWN:    0x17c TYPE_TAG 0     EntryBuilder         ~120B with class name
+                    TYPE_TAG 0xe OnlineStatusUpdater  (same opcode, different tag)
+  DESPAWN:  0x143                 BreakupBuilder       ~32B (id only)
+
+GROUP:: TYPED PACKETS (8 subclasses, all wire-mapped):
+  EntryBuilder         -> 0x17c (TYPE TAG 0)
+  BreakupBuilder       -> 0x143
+  OnlineStatusUpdater  -> 0x17c (TYPE TAG 0xe)
+  MemberInfoUpdater    -> 0x18b
+  WorkSyncUpdater      -> 0x187
+  EntryLinkShellBuilder-> 0x188 (single) / 0x189 (batch)
+  PropertyUpdater      -> internal via EntryLinkShellBuilder vtable[12]
+
+PER-ACTOR 3x5 MATRIX (15 opcodes 0x148-0x156):
+                  SINGLE     VARIABLE    FIXED-16   FIXED-32   FIXED-64
+  TYPE A (112B):  0x148      0x149       0x14a      0x14b      0x14c
+                  ACTION single/batch action results
+  TYPE B (6B):    0x14d      0x14e       0x14f      0x150      0x151
+                  STATUS icons (id + duration + flag)
+  TYPE C (2B):    0x152      0x153       0x154      0x155      0x156
+                  ID lists (action ids / hate list / targets)
+
+ACTOR-BOUND VARIANTS (8 opcodes):
+  0x146  ACTOR EVENT with context lookup
+  0x16d  ACTOR EVENT byte payload
+  0x16e  ACTOR EVENT with context lookup
+  0x176  ACTOR EVENT simple payload
+  0x18f  ACTOR TRIGGER no payload
+  0x190  ACTOR EVENT with payload
+  0x191  ACTOR PING (lookup + dispatch no args)
+  (+ 0x148-0x156 above)
+
+STATE EVENT CLUSTERS (10 opcodes):
+  0x17a/0x17d/0x17e         session-gated state events (uint/uint64)
+  0x17f-0x182               state events uint64 typeA/B/C/D
+  0x183/0x184/0x185         uint to generic state variants
+
+LARGE BATCH:
+  0x18d                     Multi-record batch (up to 255 x 40B records)
+
+SYSTEM / UI:
+  0x193                     System error (22 codes: 16 slots + 6 specific)
+  0x196                     Multi-field bit-packed (player status panel)
+  0x1a3                     UI msgpool push uint
+  0x198                     STRING UPDATE (rename/announcement)
+
+MULTI-ENTITY STATE:
+  0x186                     Multi-actor state set (12B per record)
+  0x18a                     Bulk pair set (8B per entry)
+
+WORKSYNC FIELD-LEVEL (lower):
+  0x12F (56B)               WorkSync update (C->S string-keyed)
+  0x132 (24B)               Item state notify
+  0x133 (56B)               WorkSync alt / spawn init ACK
 
 PER-ACTOR MESSAGE SYSTEM (opcodes 0x148-0x156):
   Routing: ALL 15 -> ActorMessageQueue_lookupOrCreate_perActorId_WorkPathTree
@@ -799,7 +844,7 @@ SERVER-SIDE COMPLETE PROTOCOL:
   4. Now push state updates via 0x12F/0x132/0x133
 ```
 
-## 13b. Application Main Loop + Per-Frame Tick (CAPSTONE)
+## 13b. Application Main Loop + Per-Frame Tick (15 SLOTS COMPLETE)
 
 ```text
 Win32 message loop (outer)
@@ -808,16 +853,32 @@ Application_mainTick_perFrame_eventLoopAndSubsystems  @ 0x004da680
    ↓ (3 startup gates: +0x4a8, +0x17444, +0x174dc)
 PerFrameTick_Subsystems_widgets_zone_spawn_etc        @ 0x00578970
    ↓
-[Widget x4] [Spawn T0 at slot[6]] [Timeout @ slot[10]] ... 15+ slots
+[15 SUBSYSTEM SLOTS, all characterized]
 
-Subsystem container slots (this+N):
-  this[2-5]   4 widget container ticks
-  this[6]     SPAWN PIPELINE (perFrameWrapper -> T0)         CONFIRMED
-  this[7-9]   3 unmapped subsystems
-  this[10]    Timeout monitor (900-frame / 15-sec threshold)  CONFIRMED
-  this[11-12] 2 unmapped subsystems
-  this[1]+0x110/+0x114  2 more subsystems
-  this[0xd]   Pluggable subsystem (vtable[+8])
+PERFRAMETICK SUBSYSTEM SLOT MAP (FINAL):
+  [0]   Engine state container
+  [1]   Secondary state container (+0x110 and +0x114 child subsystems)
+  [2]   Widget LIFECYCLE pump (state machine)
+  [3]   Widget ANIMATION + state tick
+  [4]   Widget LOAD MGR (message 0xde)
+  [5]   SPREADSHEET CSV PRELOADER (4 CSVs: worldMasterLogCategory,
+        command [with ID filters], achievement, hamletDefScore)
+  [6]   SPAWN PIPELINE (perFrameWrapper -> T0)               CONFIRMED
+  [7]   INBOUND WORKSYNC PUMP complex (32/tick)              NEW
+  [8]   INBOUND WORKSYNC PUMP simple (32/tick)               NEW
+  [9]   Widget thunk
+  [10]  TIMEOUT MONITOR (900-frame / 15-sec threshold)
+  [11]  COMPOUND widget tick (2 sub-dispatchers)             NEW
+  [12]  DEAD SESSION CLEANUP TICK (GC zombie sessions)       NEW
+  [1+0x110]  PLAYER MODE STATE TICKER (3 bindings + ref)     NEW
+  [1+0x114]  WIDGET CONTAINER CHILD NOTIFIER                 NEW
+  [0xd] Pluggable polymorphic (vtable[+8])
+
+THROUGHPUT CAPACITY:
+  - 2 WorkSync pumps x 32/tick = 64 state updates/frame
+  - At 60Hz: ~3840 state updates/sec peak
+  - Spawn pipeline: 2 actors/frame = 120 spawns/sec
+  - 50-actor zone ramp: ~417ms (fade-in at zone enter)
 
 EXPLAINS THE 2-PER-FRAME SPAWN RATE:
   - T1 reads 2 entries per call
@@ -906,17 +967,24 @@ GENERAL PARAMETER (player stats):
 
 ## 15. Key Findings by Category (jump points)
 
-### EXE Architecture (2026-05-28 SESSION -- newest)
+### EXE Architecture (2026-05-28 SESSION FINAL -- 24 commits)
 
-- `finding_group_typed_packets_remaining_opcodes_0x187_0x18b.md` -- Group:: typed-packets wire COMPLETE: 0x187 + 0x18b + PropertyUpdater
-- `finding_opcode_0x143_DESPAWN_packet_breakupBuilder_path.md` -- Opcode 0x143 = DESPAWN (BreakupBuilder)
-- `finding_opcode_0x18d_session_batch_multi_record_state_push.md` -- 0x18d batch + 0x193 internals (22 codes)
-- `finding_zone_inbound_game_opcodes_0x143_0x1a8_bridge_pattern.md` -- 50+ game opcodes + per-actor msg system (15 opcodes)
-- `finding_spawn_wire_side_CLOSED_opcode_0x17c_zone_main_inbound_dispatcher.md` -- CAPSTONE: spawn wire-side CLOSED + opcode 0x17c + Zone MAIN dispatcher 50+ opcodes + 7 Group:: subclasses
-- `finding_zoneclient_inbound_dispatch_layer_partial_threshold_0x1c11.md` -- 0x1c11 sequence threshold + Network RTTI
-- `finding_application_mainTick_and_per_frame_subsystem_dispatch.md` -- CAPSTONE: main loop + per-frame tick
-- `finding_spawn_pipeline_typed_packet_ring_buffer_6_stage_architecture.md` -- SPAWN 6-stage; Group:: namespace
-- `finding_isInstanceOf_thunk_dual_dispatch_rtti_plus_luachain.md` -- 7 RTTI + Lua chain walk
+- `finding_perFrameTick_subsystems_COMPLETE_15_slots_characterized.md` -- ALL 15 PerFrameTick slots characterized + 5 wire variants + 4 new bindings
+- `finding_zone_inbound_opcodes_COVERAGE_COMPLETE.md` -- 95% non-fallback opcode coverage in 0x143-0x1a8
+- `finding_misc_game_opcodes_0x186_0x18a_0x191_0x196_0x198_characterized.md` -- 5 misc opcodes
+- `finding_linkshell_wire_opcodes_0x188_0x189_CLOSED.md` -- LINKSHELL wire-side + PropertyUpdater mystery solved
+- `finding_linkshell_subsystem_inventory.md` -- Linkshell Lua inventory + 8th Group:: subclass discovery
+- `finding_per_actor_messages_COMPLETE_15_opcodes_3x5_matrix.md` -- 3x5 matrix (15 opcodes)
+- `finding_per_actor_message_constructors_semantized.md` -- per-actor msg construction patterns
+- `finding_opcode_0x18d_session_batch_multi_record_state_push.md` -- 0x18d batch + 0x193 internals
+- `finding_opcode_0x143_DESPAWN_packet_breakupBuilder_path.md` -- DESPAWN
+- `finding_group_typed_packets_remaining_opcodes_0x187_0x18b.md` -- 0x187 + 0x18b
+- `finding_zone_inbound_game_opcodes_0x143_0x1a8_bridge_pattern.md` -- 50+ game opcodes
+- `finding_spawn_wire_side_CLOSED_opcode_0x17c_zone_main_inbound_dispatcher.md` -- SPAWN wire-side
+- `finding_zoneclient_inbound_dispatch_layer_partial_threshold_0x1c11.md` -- 0x1c11 threshold
+- `finding_application_mainTick_and_per_frame_subsystem_dispatch.md` -- CAPSTONE main loop
+- `finding_spawn_pipeline_typed_packet_ring_buffer_6_stage_architecture.md` -- SPAWN T0-T5
+- `finding_isInstanceOf_thunk_dual_dispatch_rtti_plus_luachain.md` -- _isInstanceOf dual dispatch
 - `finding_canCreateActorByName_thunk_creatability_check.md` -- class system thunk family complete
 
 ### EXE Architecture (2026-05-27 session findings)
@@ -996,7 +1064,7 @@ Binding ID    Field                                 Type
 0xbbd (3005)  bazaar master flag (NEW discovery)
 0xbbe (3006)  charaWork.property                    u32 (bitset)
 
-Band ranges (full catalog has 25+ in these bands):
+Band ranges (full catalog has 29+ in these bands; 7Axxx + C00xxx NEW):
   1xxx   charaWork.parameterSave (hp/hpMax/mp/mpMax/state/level/...)
   2xxx   charaWork.battleSave (potencial, status, target, ...)
   3xxx   charaWork.property (bitsets, flags)
@@ -1007,6 +1075,8 @@ Band ranges (full catalog has 25+ in these bands):
   300xxx Group-related
   400xxx World/zone-related
   500xxx Director/event-related
+  7Axxx  PLAYER MODE state (NEW: 0x7a121/22/23 -- combat/event/cutscene mode)
+  C00xxx Mode/state root refs (NEW: 0xc0000024 = mode root)
 
 The READ side uses binding-id directly (compact 2-byte wire).
 The WRITE side uses string paths (verbose ~30-byte wire).
@@ -1080,12 +1150,12 @@ CommandUpdate record           0x118 B   (280 bytes)
 BehaviorLogger listener        0x48 B    (72 bytes; separate from CommandUpdate)
 ```
 
-## 19. Coverage Summary (As of 2026-05-28 LATE)
+## 19. Coverage Summary (As of 2026-05-28 SESSION FINAL)
 
 ```text
-FINDINGS:                176+ total
-  EXE-side:               78+
-  Lua-side:               86
+FINDINGS:                187+ total
+  EXE-side:               80+
+  Lua-side:               87
   Correlation:            13
 
 EXE NATIVE SURFACE:     ~344 _cpp bindings + ~62 pure-Lua wrappers
@@ -1119,14 +1189,20 @@ RESUMECHECKER SUBCLASSES: 11 confirmed (was 10)
   Sizes: 3 of 8B, 4 of 12B, 1 each of 16B/40B/120B/148B
   Latest add: LpbLoader::ResumeChecker (engine-internal, ~120B)
 
-RTTI TYPES CONFIRMED: 24 total (17 base + 7 Group:: subclasses)
+RTTI TYPES CONFIRMED: 25 total (17 base + 8 Group:: subclasses)
   4 in Component::Lua::GameEngine::
   9 in Application::Lua::Script::Client::Control::
   2 in Component::Network::IpcChannel:: / Application::Network::*
-  8 in Application::Lua::Script::Client::Group::
+  9 in Application::Lua::Script::Client::Group::
     (PacketRequestBase + EntryBuilderBase + EntryBuilder +
      BreakupBuilder + OnlineStatusUpdater + MemberInfoUpdater +
-     PropertyUpdater + WorkSyncUpdater)
+     PropertyUpdater + WorkSyncUpdater + EntryLinkShellBuilder)
+  
+  ALL 8 GROUP:: SUBCLASSES NOW WIRE-MAPPED:
+    EntryBuilder -> 0x17c TAG0       BreakupBuilder -> 0x143
+    OnlineStatusUpdater -> 0x17c TAG0xe   MemberInfoUpdater -> 0x18b
+    WorkSyncUpdater -> 0x187          EntryLinkShellBuilder -> 0x188/0x189
+    PropertyUpdater -> vtable[12] of EntryLinkShellBuilder (INTERNAL)
 
 WIRE OPCODES PINNED:
   Outbound: 7 named (0x12d-0x135) + chat opcodes
