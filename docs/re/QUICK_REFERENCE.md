@@ -4,12 +4,13 @@
 findings (80 EXE + 87 Lua + 13 correlation). Use this when you need a
 fast lookup; refer to the named finding files for full context.
 
-Last updated: 2026-05-28 +CONTENT (35-commit session). WIRE PROTOCOL
-100% bidirectional + CONTENT MODEL mapped: work schemas (battle/event/
-player/area/director), command flow, zone bootstrap, NPC talk-turn,
-Director orchestration. KEY ARCHITECTURAL PRINCIPLE confirmed x4:
-"content is client-side; server orchestrates state + triggers +
-authorization". READY-TO-IMPLEMENT-SERVER milestone reached.
+Last updated: 2026-05-28 +ENGINE-COMPLETE (43-commit session). WIRE
+PROTOCOL 100% bidirectional + CONTENT MODEL + ALL 13 ENGINE BASE
+MECHANICS mapped (Actor/Chara/Player/Npc/Area/Director/Quest/Status/
+Command/Judge/Item/Group/Widget). KEY PRINCIPLE confirmed x5: content
+is client-side; server orchestrates state + triggers + authorization.
+The 1.x client engine architecture is FULLY MAPPED; remaining corpus
+is content instances. READY-TO-IMPLEMENT-SERVER.
 
 For historical narrative + pre-session findings, see
 `MASTER_INDEX_1.x_MODEL.md`.
@@ -982,6 +983,32 @@ extensive client Lua (it IS the game logic).
 Confirmed across 4 independent layers: zone / NPC / combat / director.
 ```
 
+## 13d-2. The 13 Engine Base Mechanics (ALL MAPPED)
+
+```text
+Base class          Role / key facts
+----------          ----------------
+ActorBase           lifecycle (spawn T0-T3, vtable[0x6c] ctor)
+CharaBase           battle/event schemas (52 skills, generalParameter[35])
+PlayerBase          command flow (-> 0x12d), 18 _on* callbacks, GC progression
+NpcBase             talk-turn flow (channel 38), client-side dialogue
+AreaBase            zone bootstrap (areaWork, 64-actor, 8 zone prefixes)
+DirectorBase        content orchestration (_temp/_sync, notice auth)
+QuestBase           quest engine (accept/complete server-gated, 629 scripts)
+StatusBase          status effects (5-param, level-adjust, 0x14f/0x150)
+CommandBase         action model (command.csv, 5 judge categories, canFire/fire)
+Judge               data provider (calc CSVs) + depiction (nameplate)
+ItemBase            binds 5 stat CSVs + localized name (190+ queries in _common)
+GroupBase           256-member, _onUpdateMember* (inbound 0x18b/0x187/Linkshell)
+WidgetBase/Desktop  UI orchestrator (255 methods, 13 subsystems)
+
+Cross-cutting: server-notify/notice authorization, spawn pipeline (T0-T5),
+WorkSync (4-mode encoding), client-side-content principle (5x confirmed).
+
+The remaining ~2600 Lua files INSTANTIATE these patterns (content
+instances): concrete quests/NPCs/directors/statuses/commands/items/widgets.
+```
+
 ## 13e. Work Schemas (server-replicable state)
 
 ```text
@@ -1093,7 +1120,16 @@ GENERAL PARAMETER (player stats):
 - `finding_invokeLua_roster_closed_80_complete.md` -- 80 invokeLua callbacks
 - `finding_widget_3tier_dispatcher_architecture.md` -- 3-tier widget dispatch
 
-### Lua Architecture (2026-05-28 CONTENT batch -- newest)
+### Lua Architecture (2026-05-28 ENGINE-COMPLETE batch -- newest)
+
+- `finding_item_and_group_base_classes_final_sweep.md` -- ItemBase + GroupBase; ENGINE BASE-MECHANICS SWEEP COMPLETE (13)
+- `finding_judge_system_data_and_depiction_layer.md` -- judge = calc-CSV data provider + nameplate resolver (not permission gate)
+- `finding_commandbaseclass_action_model.md` -- command.csv actors, 5 judge categories, canFire/fire interface
+- `finding_statusbaseclass_status_effect_engine.md` -- 5-param status, level-adjust potency, 0x14f/0x150
+- `finding_questbaseclass_quest_engine_model.md` -- quest engine, accept/complete server-gated, 629 scripts
+- `finding_server_notify_family_and_notice_authorization.md` -- callServerOnX + notice authorization (0x12d simple)
+
+### Lua Architecture (2026-05-28 CONTENT batch)
 
 - `finding_directorbaseclass_content_orchestration_model.md` -- Director content engine: _sync state + notice authorization (client-side-content x4)
 - `finding_npc_event_talk_turn_flow_client_side.md` -- NPC talk-turn flow; dialogue is client-side; channel 38
@@ -1239,12 +1275,13 @@ BehaviorLogger listener        0x48 B    (72 bytes; separate from CommandUpdate)
 ## 19. Coverage Summary (As of 2026-05-28 SESSION FINAL)
 
 ```text
-FINDINGS:                196+ total
+FINDINGS:                202+ total
   EXE-side:               83+
-  Lua-side:               93
-  Correlation:            13
+  Lua-side:               98
+  Correlation:            14
 
-CONTENT MODEL: client-side content + server orchestration (x4 confirmed)
+ENGINE BASE MECHANICS: 13/13 mapped (all base classes)
+CONTENT MODEL: client-side content + server orchestration (x5 confirmed)
   Work schemas: battle/event/player/area/director (server-replicable)
   Flows: command->0x12d, spawn, zone bootstrap, NPC talk-turn, director
 WIRE PROTOCOL: 100% MAPPED both directions (server-ready)

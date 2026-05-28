@@ -2,19 +2,73 @@
 
 This document is the **executive summary** of the reverse-engineering
 work completed during the multi-session research effort. The 1.x
-client model is decomposed across **196+ findings** (90 EXE + 93 Lua
-+ 13 correlation) covering: wire protocol, schemas, native binding
+client model is decomposed across **202+ findings** (90 EXE + 98 Lua
++ 14 correlation) covering: wire protocol, schemas, native binding
 APIs, gameplay subsystems, data correlations.
 
-Last updated: 2026-05-28 +CONTENT (35-commit session). WIRE PROTOCOL
-100% bidirectional + CONTENT MODEL mapped (work schemas, command flow,
-zone bootstrap, NPC talk-turn, Director orchestration). KEY PRINCIPLE
-confirmed x4: content is client-side; server orchestrates state +
-triggers + authorization. READY-TO-IMPLEMENT-SERVER.
+Last updated: 2026-05-28 +ENGINE-COMPLETE (43-commit session). WIRE
+PROTOCOL 100% bidirectional + CONTENT MODEL + ALL 13 ENGINE BASE
+MECHANICS mapped. KEY PRINCIPLE confirmed x5: content is client-side;
+server orchestrates state + triggers + authorization. The 1.x client
+ENGINE ARCHITECTURE IS FULLY MAPPED -- remaining corpus (~2600 Lua
+files) is content instances. READY-TO-IMPLEMENT-SERVER.
 
 **For fast lookups**, see `docs/re/QUICK_REFERENCE.md` (22 sections,
 lookup tables for all architectural facts). This index has the
 narrative; QUICK_REFERENCE has the tables.
+
+## Session 2026-05-28 +ENGINE-COMPLETE -- ALL 13 BASE MECHANICS (+8 commits)
+
+```text
+Completed the engine base-mechanics sweep via Lua deep-dives. All 13
+base classes now documented; the remaining ~2600 Lua files are content
+instances that instantiate these patterns.
+
+NEW BASE MECHANICS THIS BATCH:
+  QuestBase     quest engine -- accept/complete server-gated (notices),
+                reward via event-mode widget, job-quest 3-stage, SNPC +
+                cutscene client-side. 629 quest scripts inherit.
+  StatusBase    status effects -- 5-param (Param1/2/3/Power/Life),
+                level-adjust potency (growth-curve), compatibility/
+                stacking. Wire 0x14f/0x150 carries id+duration+flag;
+                client computes effect. 158 status scripts.
+  CommandBase   action model -- command.csv-backed actors, 5 judge
+                categories (Common/Battle/Craft/Harvest/Negotiation),
+                7 flags, abstract canFire/fire/command. The cmdObj the
+                player command flow calls.
+  Judge         CLARIFIED: NOT a permission gate. CommonJudge = shared
+                calc-CSV data provider (itemData..exp_BPCost);
+                DepictionJudge = nameplate/relationship resolver.
+                Per-category judges are stubs (validation distributed).
+  ItemBase      binds 5 stat CSVs (itemData/equipment/weapon/armor/
+                accessory) + localized name; 190+ queries in _common.
+  GroupBase     256-member capacity; _onUpdateMember* callbacks = the
+                INBOUND receivers for Group:: wire packets (0x18b
+                MemberInfoUpdater, 0x188/0x189 EntryLinkShell, 0x187
+                WorkSyncUpdater). 4 subclass families.
+  Server-notify callServerOnX/doServerOnX (Command/Talk/Emote/Push) +
+                notice authorization: callServerOnX -> 0x12d SIMPLE +
+                ResumeChecker suspend -> server accept/reject.
+
+ALL 13 ENGINE BASE MECHANICS:
+  ActorBase, CharaBase, PlayerBase, NpcBase, AreaBase, DirectorBase,
+  QuestBase, StatusBase, CommandBase, Judge, ItemBase, GroupBase,
+  WidgetBase/DesktopWidget.
+
+CROSS-CUTTING: server-notify/notice, spawn pipeline (T0-T5), WorkSync
+(4-mode), client-side-content principle (confirmed 5x: zone/NPC/combat/
+director/status).
+
+KEY WIRE<->LUA LOOP CLOSURES:
+  - Group:: packets (EXE) -> GroupBase _onUpdateMember* (Lua)
+  - command (Lua) -> _executeCommand -> 0x12d checksummed (player abilities)
+  - callServerOnX (Lua) -> 0x12d simple + notice (system/event)
+  - status list 0x14f/0x150 -> StatusBase effect computation
+
+The 1.x client engine architecture is FULLY MAPPED. Remaining work is
+content cataloging (instances), CSV data tables, or a unified server
+implementation guide.
+```
 
 ## Session 2026-05-28 +CONTENT -- CONTENT MODEL + ARCHITECTURAL PRINCIPLE (+7 commits)
 
