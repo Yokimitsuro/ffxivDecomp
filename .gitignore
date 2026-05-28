@@ -19,3 +19,14 @@ data/client_exports/ffxivtool/decode_csv/
 data/client_exports/ffxivtool/raw_csv/
 data/client_exports/ffxivtool/mycsv/
 data/client_exports/ffxivtool/ShopList.txt
+
+# Ghidra program exports - PROPRIETARY, never commit.
+# *.bytes = the raw binary; *.xml = the full disassembled program image.
+# The repo keeps ONLY our annotation work: docs/re/ghidra_symbol_map.md
+# (curated) + docs/re/ghidra_symbols_userdefined.tsv (full USER_DEFINED set).
+*.bytes
+*.xml
+*.gzf
+*.gpr
+*.rep
+*.exe

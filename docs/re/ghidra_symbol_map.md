@@ -10,6 +10,13 @@ state -- ~360 named functions distilled from the documented renames.
 This is OUR annotation work (names we authored), **not** decompiled
 proprietary source. No code bytes are reproduced here.
 
+> **Complete set:** this page is a *curated, subsystem-grouped* selection
+> (~360). The **full 993 USER_DEFINED symbols** exported from Ghidra live
+> in [`ghidra_symbols_userdefined.tsv`](ghidra_symbols_userdefined.tsv)
+> (`address<TAB>name`), which is the authoritative machine-readable set
+> for bulk re-import. The raw Ghidra `*.xml`/`*.bytes` export is
+> git-ignored -- it is the proprietary program image and must stay local.
+
 ## How to re-import (Ghidra script)
 
 Paste into a Ghidra Python (Jython) script (`Window -> Script Manager
