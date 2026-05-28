@@ -540,7 +540,32 @@ Loaded by: 250+ per-class scripts each in their _onInit
 TIER 1 (35):  boot-loaded; server must push at session init
 TIER 2 (97):  per-class; lazy on actor spawn
 TIER 3 (32):  truly unmapped critical (need more sweeps)
-TIER 4 (625): useful tables (gear class variants, etc.)
+TIER 4 (625): CORRECTED -- NOT "gear variants". These are localized
+              TEXT (id+5xstr dialogue). 704/803 tables are text;
+              server needs NONE. See sec 7 correction below.
+```
+
+### CORRECTION: the "gear-variant" tables are localized TEXT (704/803)
+
+```text
+Empirical sweep of all 803 decode_csv type-headers:
+  704 tables = pure localized text (id + 5x str: JP/EN/DE/FR/ZH)
+   99 tables = have numeric columns (the real data)
+
+The families the import plan called "gear stat blocks" are ALL text:
+  acn/alc/arc/.../wvr (114)  class-guild quest dialogue (19 cls x {200..506})
+  blm/brd/.../whm (70)       job quest dialogue (7 jobs x 10 stages 0j1..1j0)
+  gcu/gcl/gcg (57)           Grand Company text
+  etc(175)/com(45)/wld(40)/spl(24)/man(21)/sum(9)/trl(6)/noc(4)  scenario text
+  -> all verified 100% `id + 5x str`. ZERO gear-stat columns.
+
+ACTUAL gear stats: ONLY the 5 decoded sheets (itemData/equipment/
+weapon/armor/accessory). var_equip(32k)/var_wep/var_tex_path = COSMETIC
+dye/color maps (f16 multipliers + dyeable bools), not stats.
+
+SERVER DATA SCOPE = ~45 tables (calc + gear sheets + content + world),
+all identified. No remaining CSV decode backlog.
+Detail: docs/data/finding_gear_variant_tables_are_localized_text_CORRECTION.md
 ```
 
 ### CONTENT-DATA COLUMN STRUCTURES DECODED (sweep complete)
@@ -1207,6 +1232,7 @@ GENERAL PARAMETER (player stats):
 - `docs/data/finding_compatibility_csv_growth_curves_closes_calc_model.md` -- 220 curves x 43 levels; CLOSES calc model (base x curve%/100) + exp_BPCost
 - `docs/data/finding_populace_and_shop_csv_structure.md` -- shopBase->shopItem (catalog/qty/price); populace 4209 NPCs; dialogue client-local
 - `docs/data/finding_quest_csv_structure_closes_content_data.md` -- quest.csv 737 (col45=director ref); quest_new_reward 16-slot x 13-col; CLOSES content-data sweep
+- `docs/data/finding_gear_variant_tables_are_localized_text_CORRECTION.md` -- CORRECTION: 704/803 tables are localized text not gear stats; refutes "gear-variant" backlog; server needs ~45 data tables
 
 ## 16. The bindWork Catalog (25+ binding IDs known)
 

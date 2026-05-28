@@ -12,8 +12,9 @@ CONTENT-DATA CSV STRUCTURE SWEEP (server calc model closed + content-
 population tables decoded). KEY PRINCIPLE confirmed x5+: content is
 client-side; server orchestrates state + triggers + authorization. The
 1.x client ENGINE ARCHITECTURE IS FULLY MAPPED -- remaining corpus
-(~2600 Lua files + ~625 gear-variant tables) is content instances +
-mechanical cataloging. READY-TO-IMPLEMENT-SERVER.
+(~2600 Lua files + ~700 localized-text CSV tables) is content
+instances. The "~625 gear-variant" CSV backlog was REFUTED -- those
+tables are localized dialogue, not gear stats. READY-TO-IMPLEMENT-SERVER.
 
 **For fast lookups**, see `docs/re/QUICK_REFERENCE.md` (22 sections,
 lookup tables for all architectural facts). This index has the
@@ -59,14 +60,44 @@ THE CLIENT/SERVER SPLIT (content-data, confirmed AGAIN):
 
 This means a server's DATA REQUIREMENTS are now fully scoped:
   - 5 calc tables (the universal calc model)
+  - 5 gear-stat sheets (itemData/equipment/weapon/armor/accessory)
   - population tables (NPC list + shop inventories + quest defs/rewards)
   - per-player state it tracks itself (quest flags, inventory, stats)
-  - ~625 remaining "useful" tables are itemData-family gear variants
-    (mechanical cataloging, documented patterns, in the 803-table catalog)
+  -> ~45 server-relevant data tables total; all identified.
 
-CONTENT-DATA SWEEP COMPLETE for all major categories. Remaining CSV
-work is mechanical (gear variants, zone/territory, achievement tables)
-following documented patterns.
+CONTENT-DATA SWEEP COMPLETE -- and the "~625 useful gear-variant
+tables" backlog was a MIS-SCOPE (see correction below).
+```
+
+## Session 2026-05-28 +CATALOG -- "gear-variant" backlog REFUTED
+
+```text
+Cataloging the supposed ~625 gear-variant tables revealed they DON'T
+EXIST as gear data. Empirical sweep of all 803 decode_csv type-headers:
+
+  704 of 803 tables = pure localized TEXT (id + 5x str: JP/EN/DE/FR/ZH)
+   99 of 803 tables = have numeric columns (the real data)
+
+The import plan's Phase 6 "gear stat blocks" hypothesis was WRONG.
+The families it called gear (acn/gla/blm0j1/gcu/com/wld/spl/etc) are
+ALL 5-language dialogue text -- class-guild quest dialogue, job-quest
+lines (7 jobs x 10 stages), Grand Company text, main-scenario dialogue.
+Verified: all 270 class+job family files are 100% uniform str, zero
+numeric columns.
+
+ACTUAL gear stats live ONLY in the 5 decoded SpreadSheet tables. The
+only literal "variant" tables (var_equip 32k rows / var_wep / var_tex_path)
+are COSMETIC dye/color maps (f16 multipliers + dyeable bool channels),
+not stats.
+
+NET: server needs ~45 data tables (calc + gear sheets + content +
+world), all identified. The other ~750 are CLIENT-LOCAL (text +
+cosmetic + xtx name lookups + UI/boot config). This is the
+client-side-content principle confirmed a 6TH time -- the bulk of the
+803-table corpus is client localized content, not server data.
+
+There is NO remaining CSV decode backlog. See:
+  docs/data/finding_gear_variant_tables_are_localized_text_CORRECTION.md
 ```
 
 ## Session 2026-05-28 +ENGINE-COMPLETE -- ALL 13 BASE MECHANICS (+8 commits)
@@ -910,6 +941,11 @@ docs/data/finding_populace_and_shop_csv_structure.md
 docs/data/finding_quest_csv_structure_closes_content_data.md
    quest.csv 737 (col45=director ref, col52=area); quest_new_reward
    16-slot x 13-col item rewards (4 qty tiers); CLOSES content-data sweep
+
+docs/data/finding_gear_variant_tables_are_localized_text_CORRECTION.md
+   CORRECTION: the "~625 gear-variant" tables are localized TEXT
+   (704/803 = id+5xstr dialogue), NOT gear stats; refutes import-plan
+   Phase 6; server data scope = ~45 tables
 ```
 
 ### Native Binding Rosters (API Surface)

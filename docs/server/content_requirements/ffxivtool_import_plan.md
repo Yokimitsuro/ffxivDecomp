@@ -195,34 +195,41 @@ hamlet (2):         hamletDefScore, hamletDefScore(2)
 `status.csv` has 399 rows -- the status effect (buff/debuff)
 master. `tribe.csv` has 16 rows -- the player race/tribe master.
 
-### Phase 6 - Useful: gear stat blocks
+### Phase 6 - CORRECTED: these are LOCALIZED TEXT, not gear stats
 
-Each gear category lives in its own table family because the EXE
-treats slot type as polymorphic dispatch (one table per piece
-shape).
+**The hypothesis below was WRONG. See
+`docs/data/finding_gear_variant_tables_are_localized_text_CORRECTION.md`.**
+
+An empirical sweep of all 803 decode_csv type-headers proved that the
+families once labelled "gear stat blocks" are 100% localized TEXT
+(`id + 5x str` = JP/EN/DE/FR/ZH dialogue), identical to populaceXxx.
+There are NO per-class gear-stat variant tables. 704 of 803 tables
+are pure text; only 99 carry numeric columns.
 
 ```
-gear_etc           175 files (most populous category, miscellaneous gear)
-gear_grandcompany   57 files (gcu* / gcl* / gcg* = uniform / linkpearl / gauntlet)
-gear_other          56 files (man / sum / trl / key / boot / bsm / tan)
-gear_common         48 files (com*)
-gear_world          40 files (wld*)
-gear_spellcraft     24 files (spl*)
-gear_class_<job>    Job-specific:
-                    blm, brd, drg, mnk, pld, war, whm (10 each, 70 total)
-                    acn, alc, arc, cnj, cul, exc, fsh, gla, gld,
-                    hrv, lnc, min, pgl, thm, wdk, wvr (6 each, 96 total)
-gear_neck            4 files (noc*)
-gear_variants        3 files (var_equip / var_wep / var_tex_path) - cosmetic
+WHAT THESE FAMILIES ACTUALLY ARE (all 5x str localized dialogue):
+  etc*  175  misc/scenario quest dialogue
+  com*   45  common (adventurer-guild) quest dialogue
+  wld*   40  world/regional quest dialogue
+  spl*   24  spellcraft/magic quest dialogue
+  man*   21  MAIN SCENARIO dialogue (Minfilia / Waking Sands / Scions)
+  gcu/gcl/gcg  57  Grand Company text (NOT gear)
+  blm/brd/drg/mnk/pld/war/whm  70  JOB quest dialogue (7 jobs x 10 stages 0j1..1j0)
+  acn/alc/arc/.../wvr  114  CLASS GUILD quest dialogue (19 classes x {200..506} stages)
+  sum/trl/noc  19  summon/trial/misc text
+
+  var_equip / var_wep / var_tex_path  3  COSMETIC dye/color/texture maps
+    (f16=1000 color multipliers + 16 dyeable bool channels + texture refs)
 ```
 
-Each gear table holds per-row stat blocks: defense, magic defense,
-elemental affinities, slot, level requirement, durability, etc.
-The columns are largely numeric.
+THE ONLY GEAR-STAT DATA is the 5 SpreadSheet tables already decoded
+in Phase 3 (itemData / equipment / weapon / armor / accessory). The
+server needs NONE of the text families above -- the client owns all
+dialogue and resolves it via the [@SHEET(xtx/...)] markup engine.
 
-Server import is straightforward (id-keyed UPSERT) once the item
-master from Phase 3 is loaded -- the gear tables are stat extensions
-of itemData rows.
+Net effect: the server's data requirement is ~45 tables (calc +
+content-population + world/zone), all already identified. The
+remaining ~750 tables are client-local (text + cosmetic + name + UI).
 
 ### Phase 7 - Useful: text / localization
 
